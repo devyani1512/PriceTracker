@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Env
+.env
+.env.local
+*.local
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+*.tsbuildinfo
+.vite/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+
+# Playwright
+playwright-report/
+test-results/
