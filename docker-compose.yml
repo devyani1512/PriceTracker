@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:17
+    container_name: price_tracker_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pricedb
+      POSTGRES_PASSWORD: pricedb
+      POSTGRES_DB: pricedb
+    ports:
+      - "5432:5432"
+    volumes:
+      - price_tracker_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pricedb -d pricedb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  price_tracker_pgdata:

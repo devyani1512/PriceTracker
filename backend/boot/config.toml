@@ -1,0 +1,50 @@
+# Price Tracker backend config. Mirrors the Go layout:
+# [Core] server + tuning, [DB] database, [Email] notifier, [Security] secrets.
+# Every value can be overridden by an environment variable (see boot/boot.py)
+# so that Render/Supabase secrets never need to live in this file.
+
+[Core]
+port = "8080"
+storefrontBase = "https://demo.inelabteamdev.com"
+catalogTotal = 1000
+catalogPageSize = 60
+catalogMinIntervalMs = 600
+catalogBudgetSeconds = 240
+maxTrackThreads = 3
+scrapeMaxAttempts = 3
+scrapeTimeoutMs = 20000
+scrapeMinMoves = 8
+scrapeMinDwellMs = 700
+headless = true
+selfTick = true
+tickSeconds = 60
+minRefreshMinutes = 10
+defaultRefreshMinutes = 120
+historyRetentionDays = 90
+cronBatchLimit = 50
+cronBudgetSeconds = 240
+
+[DB]
+host = "127.0.0.1"
+port = 5432
+user = "pricedb"
+password = "pricedb"
+dbname = "pricedb"
+# Full DSN wins over the fields above. Supabase: postgresql://postgres:...@db.xxx.supabase.co:5432/postgres
+url = ""
+
+[Email]
+host = "smtp.gmail.com"
+port = 587
+user = ""
+appPassword = ""
+fromAddr = ""
+fromName = "Price Tracker"
+
+[Security]
+jwtKey = ""
+jwtTtlHours = 168
+cronSecret = ""
+
+[CORS]
+allowOrigins = ["http://localhost:5173"]
