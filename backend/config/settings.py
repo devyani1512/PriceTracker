@@ -128,7 +128,11 @@ REST_FRAMEWORK = {
 }
 
 CORS_ALLOWED_ORIGINS = list(CFG["CORS"]["allowOrigins"])
-CORS_ALLOWED_ORIGIN_REGEXES = [r"^http://(localhost|127\.0\.0\.1):\d+$"]
+# Always allow local dev ports; extend via CORS_ORIGIN_REGEXES (e.g. Vercel previews).
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^http://(localhost|127\.0\.0\.1):\d+$",
+    *list(CFG["CORS"].get("allowOriginRegexes") or []),
+]
 CORS_ALLOW_CREDENTIALS = True
 
 # The raw boot config is exposed so the core/services can read it when lazily

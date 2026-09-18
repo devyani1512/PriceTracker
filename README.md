@@ -62,21 +62,14 @@ Bonus:
 ## Local setup
 
 ```bash
-make up          # start Postgres 17 on :5432
-make install     # uv sync (backend) + pnpm install (frontend)
-make browsers    # download Chromium for Playwright
-
-cp backend/.env.example backend/.env   # then edit if needed
+make setup    # .env, Postgres 17, deps, Chromium, migrations
+make dev      # backend :8080 + frontend :5173 together
 ```
 
-Run each side:
-
-```bash
-make backend     # http://localhost:8080
-make frontend    # http://localhost:5173
-```
-
-Open <http://localhost:5173>, register a user, search a product, and track it.
+Open <http://localhost:5173>. No secrets are needed locally — the backend reads
+`boot/config.toml` defaults (pointing at the docker-compose Postgres) and the
+frontend defaults to `http://localhost:8080`. `make setup` copies
+`backend/.env.example` to `backend/.env`; edit it to override anything.
 
 ### Observable (headed) run
 

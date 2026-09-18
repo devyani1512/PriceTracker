@@ -1,15 +1,23 @@
-.PHONY: help up down backend frontend dev install browsers test lint fmt cron stats
+.PHONY: help setup up down install browsers migrate backend frontend dev test lint fmt cron stats push
 
 help:
 	@echo "Price Tracker"
-	@echo "  make up        start local Postgres (docker compose)"
-	@echo "  make install   install backend + frontend dependencies"
-	@echo "  make browsers  install the Playwright Chromium used by the scraper"
-	@echo "  make backend   run the API on :8080"
-	@echo "  make frontend  run the Vite dev server on :5173"
+	@echo "  make setup     one-time: .env, db, deps, Chromium, migrations"
+	@echo "  make dev       run backend (:8080) + frontend (:5173) together"
+	@echo "  make up/down   start/stop local Postgres"
 	@echo "  make migrate   apply Django migrations"
 	@echo "  make cron      run one cron tick from the CLI"
-	@echo "  make test      run backend tests + frontend typecheck/build"
+	@echo "  make test      backend tests + frontend build"
+	@echo "  make push      commit everything and push (triggers Render + Vercel)"
+
+setup:
+	@test -f backend/.env || cp backend/.env.example backend/.env
+	docker compose up -d db
+	cd backend && uv sync
+	cd backend && uv run playwright install chromium
+	cd backend && uv run python manage.py migrate
+	cd frontend && pnpm install
+	@echo "Setup complete. Run 'make dev'."
 
 up:
 	docker compose up -d db
@@ -28,13 +36,18 @@ migrate:
 	cd backend && uv run python manage.py migrate
 
 backend:
+	cd backend && uv run python manage.py migrate
 	cd backend && uv run uvicorn config.asgi:application --host 0.0.0.0 --port 8080
 
 frontend:
 	cd frontend && pnpm dev
 
 dev:
-	@echo "Run 'make backend' and 'make frontend' in two terminals."
+	cd backend && uv run python manage.py migrate
+	@echo "backend :8080  |  frontend :5173  (Ctrl-C stops both)"
+	@trap 'kill 0' INT TERM; \
+		(cd backend && uv run uvicorn config.asgi:application --port 8080) & \
+		(cd frontend && pnpm dev)
 
 test:
 	cd backend && uv run pytest -q
@@ -51,3 +64,8 @@ cron:
 
 stats:
 	cd backend && find . -name '*.py' -not -path './.venv/*' | xargs wc -l
+
+push:
+	git add -A
+	git diff --cached --quiet || git commit -m "$${m:-Update}"
+	git push

@@ -47,6 +47,10 @@ def _apply_env_overrides(cfg: dict) -> dict:
         core["catalogBudgetSeconds"] = float(v)
     if v := _env("CATALOG_MIN_INTERVAL_MS"):
         core["catalogMinIntervalMs"] = int(v)
+    if v := _env("MIN_REFRESH_MINUTES"):
+        core["minRefreshMinutes"] = int(v)
+    if v := _env("DEFAULT_REFRESH_MINUTES"):
+        core["defaultRefreshMinutes"] = int(v)
 
     if v := _env("DATABASE_URL"):
         db["url"] = v
@@ -80,6 +84,8 @@ def _apply_env_overrides(cfg: dict) -> dict:
         sec["cronSecret"] = v
     if v := _env("CORS_ORIGINS"):
         cors["allowOrigins"] = [o.strip() for o in v.split(",") if o.strip()]
+    if v := _env("CORS_ORIGIN_REGEXES"):
+        cors["allowOriginRegexes"] = [o.strip() for o in v.split(",") if o.strip()]
 
     return cfg
 
