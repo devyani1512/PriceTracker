@@ -8,13 +8,16 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 ENV PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
+    UV_PYTHON=3.13 \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     DJANGO_SETTINGS_MODULE=config.settings
 
 WORKDIR /app
 
-# Install deps first for better layer caching.
-COPY pyproject.toml uv.lock* ./
+# Install deps first for better layer caching. Copy .python-version too so uv
+# builds the venv on 3.13 (the version the lockfile was resolved for) rather
+# than whatever Python happens to ship in the base image.
+COPY pyproject.toml uv.lock* .python-version ./
 RUN uv sync --no-dev --frozen 2>/dev/null || uv sync --no-dev
 
 COPY . .

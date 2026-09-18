@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from urllib.parse import unquote, urlparse
 
+from app.utils.dsn import parse_database_url
 from boot.boot import initialize_app
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -28,19 +28,7 @@ def _database(cfg: dict) -> dict:
     db = cfg["DB"]
     url = (db.get("url") or "").strip()
     if url:
-        if url.startswith("postgres://"):
-            url = "postgresql://" + url[len("postgres://") :]
-        parsed = urlparse(url)
-        return {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": parsed.path.lstrip("/") or "postgres",
-            "USER": unquote(parsed.username or ""),
-            "PASSWORD": unquote(parsed.password or ""),
-            "HOST": parsed.hostname or "",
-            "PORT": str(parsed.port or ""),
-            "CONN_MAX_AGE": 60,
-            "OPTIONS": {"connect_timeout": 10},
-        }
+        return parse_database_url(url)
     return {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": db.get("dbname", "postgres"),
