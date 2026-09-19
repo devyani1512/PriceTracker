@@ -78,6 +78,12 @@ def _apply_env_overrides(cfg: dict) -> dict:
         core["historyMaxPoints"] = int(v)
     if v := _env("CRON_INLINE_BUDGET_SECONDS"):
         core["cronInlineBudgetSeconds"] = float(v)
+    if v := _env("JOB_MAX_ATTEMPTS"):
+        core["jobMaxAttempts"] = int(v)
+    if v := _env("JOB_RETRY_BACKOFF_SECONDS"):
+        core["jobRetryBackoffSeconds"] = int(v)
+    if v := _env("JOB_RETRY_MAX_BACKOFF_SECONDS"):
+        core["jobRetryMaxBackoffSeconds"] = int(v)
 
     if v := _env("DATABASE_URL"):
         db["url"] = v

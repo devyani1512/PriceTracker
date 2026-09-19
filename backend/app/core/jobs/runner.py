@@ -42,8 +42,12 @@ class JobRunner:
         self.lease_seconds = max(30, int(core.get("scheduledLeaseSeconds", 600)))
         self.batch_limit = max(1, int(core.get("cronBatchLimit", 50)))
         self.budget_seconds = max(1.0, float(core.get("cronBudgetSeconds", 240)))
-        self.max_attempts = max(1, int(core.get("jobMaxAttempts", 2)))
+        # 0 means "retry until it passes" — the runner never drops a failed job.
+        self.max_attempts = max(0, int(core.get("jobMaxAttempts", 2)))
         self.retry_backoff = max(1, int(core.get("jobRetryBackoffSeconds", 30)))
+        self.retry_max_backoff = max(
+            self.retry_backoff, int(core.get("jobRetryMaxBackoffSeconds", 600))
+        )
         self.max_task_age = max(0, int(core.get("maxTaskAgeSeconds", 7200)))
 
         self._manual = ThreadPoolExecutor(
@@ -210,15 +214,22 @@ class JobRunner:
 
     def _schedule_retry(self, task, summary: dict) -> None:
         attempts = int(task.attempts or 0) + 1
-        if attempts < self.max_attempts:
+        # max_attempts <= 0 means keep retrying until it passes. A free worker
+        # picks the job back up on a later drain; nothing is dropped here.
+        if self.max_attempts <= 0 or attempts < self.max_attempts:
             self.db.tasks.reschedule(
                 task.job_id,
-                utcnow() + timedelta(seconds=self.retry_backoff),
+                utcnow() + timedelta(seconds=self._retry_delay(attempts)),
                 attempts,
             )
         else:
             self.db.tasks.complete(task.job_id)
         summary["failed"] += 1
+
+    def _retry_delay(self, attempts: int) -> int:
+        """Exponential backoff, capped so even a stuck job keeps retrying."""
+        exponent = min(max(0, attempts - 1), 20)  # avoid huge powers on long retries
+        return min(self.retry_backoff * (2**exponent), self.retry_max_backoff)
 
     def _is_stale(self, task, now) -> bool:
         """Drop slots that are so old a fresher one must already be due."""

@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import type { ScrapeLog } from "../api";
 import {
   formatCurrency,
@@ -22,6 +23,7 @@ export function LogTable({ logs }: { logs: ScrapeLog[] }) {
       <table className="w-full border-collapse text-[12px]">
         <thead>
           <tr className="border-b border-line text-left text-[11px] uppercase tracking-wide text-ink-faint">
+            <th className="py-2 pr-3 font-medium">Product</th>
             <th className="py-2 pr-3 font-medium">When</th>
             <th className="py-2 pr-3 font-medium">Outcome</th>
             <th className="py-2 pr-3 font-medium">Try</th>
@@ -34,6 +36,15 @@ export function LogTable({ logs }: { logs: ScrapeLog[] }) {
         <tbody>
           {logs.map((log) => (
             <tr key={log.id} className="border-b border-line last:border-0">
+              <td className="max-w-[180px] py-2 pr-3">
+                <Link
+                  to={`/product/${log.productId}`}
+                  className="block truncate text-ink-secondary hover:text-ink hover:underline"
+                  title={log.productName ?? `#${log.productId}`}
+                >
+                  {log.productName ?? `#${log.productId}`}
+                </Link>
+              </td>
               <td
                 className="whitespace-nowrap py-2 pr-3 text-ink-secondary"
                 title={formatDateTime(log.createdAt)}

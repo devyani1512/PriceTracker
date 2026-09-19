@@ -35,8 +35,9 @@ scrapeBrowserRecycle = 25
 scrapeLayoutTtlSeconds = 300
 # Hard cap per product (attempts included). When exceeded we stop and move on;
 # the durable task is retried on a later tick, so one flaky product can't stall
-# the whole batch. 0 disables it.
-scrapeProductBudgetMs = 120000
+# the whole batch. Must be >= scrapeRevealTimeoutMs or the reveal setting is
+# silently clipped (the code enforces that floor). 0 disables it.
+scrapeProductBudgetMs = 360000
 # How many products to scrape concurrently inside one browser (own context each).
 scrapePageConcurrency = 2
 headless = true
@@ -50,8 +51,12 @@ allowedRefreshMinutes = [10, 30, 60, 120]
 # Durable job queue / worker tuning.
 scheduledPollSeconds = 15
 scheduledLeaseSeconds = 600
-jobMaxAttempts = 2
+# Retries. 0 = keep retrying a failed job until it passes (never dropped). A
+# positive value caps attempts, after which the next cron tick requeues it.
+jobMaxAttempts = 0
 jobRetryBackoffSeconds = 30
+# Exponential backoff is capped here so even a stuck job keeps retrying.
+jobRetryMaxBackoffSeconds = 600
 maxTaskAgeSeconds = 7200
 historyMaxPoints = 20000
 cronBatchLimit = 50

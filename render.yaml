@@ -40,6 +40,10 @@ services:
         value: "1"           # user "Refresh" lane — keep it fast and small
       - key: SCHEDULED_TRACK_THREADS
         value: "1"           # scheduled lane; bounded so memory stays flat
+      - key: JOB_MAX_ATTEMPTS
+        value: "0"           # 0 = keep retrying failed scrapes until they pass
+      - key: JOB_RETRY_MAX_BACKOFF_SECONDS
+        value: "600"         # cap exponential retry backoff at 10 minutes
       - key: CRON_INLINE_BUDGET_SECONDS
         value: "25"          # only used when /cron/tick is called with ?drain=true
       - key: SCRAPE_REVEAL_TIMEOUT_MS
@@ -51,7 +55,7 @@ services:
       - key: COOKIE_BANNER_TIMEOUT_MS
         value: "1000"        # per-check wait for the usually-absent banner
       - key: SCRAPE_PRODUCT_BUDGET_MS
-        value: "120000"      # cap per product; move on and retry next tick
+        value: "360000"      # cap per product; must be >= SCRAPE_REVEAL_TIMEOUT_MS
       - key: SCRAPE_PAGE_CONCURRENCY
         value: "2"           # pages per browser in the scheduled batch
       - key: CORS_ORIGINS

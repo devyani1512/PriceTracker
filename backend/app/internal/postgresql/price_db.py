@@ -108,14 +108,24 @@ class PriceRepo:
     def logs_for_product(
         self, product_id: int, limit: int = 50, offset: int = 0
     ) -> tuple[list[ScrapeLog], int]:
-        queryset = ScrapeLog.objects.filter(product_id=product_id).order_by("-created_at")
+        queryset = (
+            ScrapeLog.objects.filter(product_id=product_id)
+            .select_related("product")
+            .order_by("-created_at")
+        )
         return list(queryset[offset : offset + limit]), queryset.count()
 
     def logs_for_tracker(
         self, tracker_id: str, limit: int = 50, offset: int = 0
     ) -> tuple[list[ScrapeLog], int]:
-        queryset = ScrapeLog.objects.filter(tracker_id=tracker_id).order_by("-created_at")
+        queryset = (
+            ScrapeLog.objects.filter(tracker_id=tracker_id)
+            .select_related("product")
+            .order_by("-created_at")
+        )
         return list(queryset[offset : offset + limit]), queryset.count()
 
     def recent_logs(self, limit: int = 50) -> list[ScrapeLog]:
-        return list(ScrapeLog.objects.order_by("-created_at")[:limit])
+        return list(
+            ScrapeLog.objects.select_related("product").order_by("-created_at")[:limit]
+        )

@@ -10,8 +10,9 @@ That split is what makes the schedule as reliable as a manual refresh:
 
 * the tick never blocks on a slow scrape, so overlapping ticks are harmless;
 * every due product is recorded even if the instance sleeps mid-run;
-* a failure is recorded and the slot is marked covered, so we wait for the next
-  slot instead of hammering the storefront.
+* a failure is recorded and retried until it passes (the job runner reschedules
+  it, and a free worker picks it back up). The slot is only marked covered on a
+  successful scrape, so a transient timeout never costs a whole refresh interval.
 
 One scrape serves every tracker due for that product. Coverage is computed when
 the scrape finishes (not when it was queued), so a task stays correct even if
@@ -167,12 +168,9 @@ class CronCore:
             slot_at=slot,
         )
 
-        snapshot = None
-        if result is not None and result.success and result.snapshot_id:
-            snapshot = self.db.prices.get_snapshot(result.snapshot_id)
-
-        self._cover_due(product_id, slot, snapshot)
-        self._notify(product_id, snapshot)
+        outcome = self._finish_track(task, product_id, slot, result)
+        if outcome is not None:
+            raise outcome
 
     def run_track_tasks(self, tasks: list, deadline: float | None = None) -> dict:
         """Batch handler: scrape many products in one browser.
@@ -215,14 +213,30 @@ class CronCore:
 
         for request, result in results:
             task = owner[id(request)]
-            snapshot = None
-            if result.success and result.snapshot_id:
-                snapshot = self.db.prices.get_snapshot(result.snapshot_id)
-            self._cover_due(request.product_id, request.slot_at, snapshot)
-            self._notify(request.product_id, snapshot)
-            outcomes[task.job_id] = None
+            outcomes[task.job_id] = self._finish_track(
+                task, request.product_id, request.slot_at, result
+            )
 
         return outcomes
+
+    def _finish_track(self, task, product_id: int, slot, result):
+        """Cover a finished scrape, or hand it back to the runner to retry.
+
+        A failed scrape is never allowed to consume the slot. Returning an
+        exception makes the job runner reschedule it; because the slot stays
+        uncovered, a worker will keep picking it up until it passes. Only a
+        successful snapshot covers the slot and advances the trackers.
+        """
+        snapshot = None
+        if result is not None and result.success and result.snapshot_id:
+            snapshot = self.db.prices.get_snapshot(result.snapshot_id)
+
+        if result is not None and not result.success and snapshot is None:
+            return RuntimeError(result.error or "scrape failed")
+
+        self._cover_due(product_id, slot, snapshot)
+        self._notify(product_id, snapshot)
+        return None
 
     def _notify(self, product_id: int, snapshot) -> None:
         if snapshot is not None and self.snapshot_hook is not None:

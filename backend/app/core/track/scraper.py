@@ -464,7 +464,14 @@ class BrowserSession:
     async def _run_attempts(self, result: ScrapeResult, page: Page, context, url: str) -> None:
         cfg = self.cfg
         max_attempts = max(1, int(cfg["Core"]["scrapeMaxAttempts"]))
+        nav_timeout = int(cfg["Core"]["scrapeTimeoutMs"])
+        reveal_timeout = int(cfg["Core"].get("scrapeRevealTimeoutMs", 300000))
         budget_ms = int(cfg["Core"].get("scrapeProductBudgetMs", 120000))
+        if budget_ms > 0:
+            # The per-product cap must not silently undercut the reveal timeout:
+            # a 5-minute reveal setting is pointless if the product is killed at
+            # 2. Keep room for one navigation/other phases on top of the reveal.
+            budget_ms = max(budget_ms, reveal_timeout + nav_timeout)
         product_deadline = (_now() + budget_ms / 1000.0) if budget_ms > 0 else None
 
         for attempt in range(1, max_attempts + 1):
@@ -525,6 +532,19 @@ class BrowserSession:
             except Exception as exc:  # noqa: BLE001 - classify and record everything
                 duration = _ms(attempt_started)
                 kind, message = _classify_exception(exc)
+                # A slow price reveal is capped by the per-product budget, not the
+                # (longer) reveal timeout. Say so, so the log doesn't read like an
+                # arbitrary "timeout 107398ms exceeded".
+                if (
+                    isinstance(exc, PlaywrightTimeoutError)
+                    and product_deadline is not None
+                    and _now() >= product_deadline - 0.5
+                ):
+                    kind = "timeout"
+                    message = (
+                        f"Timed out after {budget_ms / 1000:.0f}s: per-product budget "
+                        "reached before the price reached a terminal state"
+                    )
                 result.attempts_detail.append(
                     ScrapeAttempt(
                         attempt=attempt,

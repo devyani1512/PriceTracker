@@ -129,9 +129,11 @@ class ScrapeLog(models.Model):
         db_table = "scrape_logs"
 
     def entry(self) -> dict:
+        product = getattr(self, "product", None)
         return {
             "id": self.id,
             "productId": self.product_id,
+            "productName": product.name if product is not None else None,
             "trackerId": self.tracker_id,
             "attempt": self.attempt,
             "outcome": self.outcome,

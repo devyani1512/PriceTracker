@@ -80,6 +80,7 @@ export type ScrapeOutcome = "success" | "retried" | "failed";
 export interface ScrapeLog {
   id: string;
   productId: number;
+  productName: string | null;
   trackerId: string | null;
   attempt: number;
   outcome: ScrapeOutcome;
