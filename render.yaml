@@ -44,6 +44,12 @@ services:
         value: "25"          # only used when /cron/tick is called with ?drain=true
       - key: SCRAPE_REVEAL_TIMEOUT_MS
         value: "300000"      # price-reveal wait; storefront can be slow
+      - key: SCRAPE_BROWSER_REUSE
+        value: "true"        # reuse one browser per worker thread
+      - key: SCRAPE_BROWSER_RECYCLE
+        value: "25"          # relaunch after N scrapes to bound memory
+      - key: COOKIE_BANNER_TIMEOUT_MS
+        value: "1000"        # per-check wait for the usually-absent banner
       - key: CORS_ORIGINS
         sync: false          # e.g. https://your-app.vercel.app
       # Render's free plan blocks outbound SMTP (ports 25/465/587), so email

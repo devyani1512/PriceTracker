@@ -58,3 +58,4 @@ class CodeCore:
         if self.self_ticker is not None:
             self.self_ticker.stop()
         self.jobs.shutdown()
+        self.track.shutdown()

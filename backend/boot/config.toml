@@ -23,6 +23,16 @@ scrapeTimeoutMs = 45000
 scrapeRevealTimeoutMs = 300000
 scrapeMinMoves = 8
 scrapeMinDwellMs = 700
+# How long to wait for the (usually absent) cookie banner per check. It used to
+# be 2500ms and, called ~3x per scrape, dominated the run; the banner renders
+# almost immediately when present.
+cookieBannerTimeoutMs = 1000
+# Reuse one Playwright + Chromium per worker thread instead of launching a
+# browser for every product. Recycle after N scrapes to bound memory, and cache
+# the layout classes for a short while.
+scrapeBrowserReuse = true
+scrapeBrowserRecycle = 25
+scrapeLayoutTtlSeconds = 300
 headless = true
 selfTick = true
 tickSeconds = 60
@@ -40,9 +50,9 @@ maxTaskAgeSeconds = 7200
 historyMaxPoints = 20000
 cronBatchLimit = 50
 cronBudgetSeconds = 240
-# Inline drain budget for POST /cron/tick. cron-job.org's free plan times a
-# request out after 30s, so keep this comfortably below that. Unfinished work
-# stays in the durable queue for the next tick.
+# Inline drain budget for POST /cron/tick?drain=true. The default tick is
+# fire-and-forget, so this only matters for synchronous drains. Keep it under
+# cron-job.org's 30s request timeout; unfinished work stays in the queue.
 cronInlineBudgetSeconds = 25
 
 [DB]

@@ -38,6 +38,9 @@ class ScrapeResult:
     error_kind: str | None = None
     duration_ms: int = 0
     attempts_detail: list[ScrapeAttempt] = field(default_factory=list)
+    # Per-phase wall-clock timings in ms, e.g. {"a1.gotoMs": 1200, "a1.hoverMs": 1100}.
+    # In-memory only; used by the benchmark command and structured logs.
+    timings: dict[str, float] = field(default_factory=dict)
 
     def as_dict(self) -> dict:
         return {
@@ -58,4 +61,5 @@ class ScrapeResult:
             "error": self.error,
             "errorKind": self.error_kind,
             "durationMs": self.duration_ms,
+            "timings": self.timings,
         }

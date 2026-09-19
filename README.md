@@ -105,6 +105,7 @@ cd backend
 uv run python manage.py migrate     # apply migrations
 uv run python manage.py cron        # one tick: enqueue + drain the queue
 uv run python manage.py run_jobs --budget 240   # drain once, then exit (cron)
+uv run python manage.py bench_scrape 1 138 --repeat 2   # phase timings / reuse A-B
 uv run python manage.py catalog     # force a full catalog sync
 uv run python manage.py runserver   # plain Django dev server (no background core)
 ```

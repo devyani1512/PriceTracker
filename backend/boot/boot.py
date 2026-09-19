@@ -52,6 +52,14 @@ def _apply_env_overrides(cfg: dict) -> dict:
         core["scrapeTimeoutMs"] = int(v)
     if v := _env("SCRAPE_REVEAL_TIMEOUT_MS"):
         core["scrapeRevealTimeoutMs"] = int(v)
+    if v := _env("COOKIE_BANNER_TIMEOUT_MS"):
+        core["cookieBannerTimeoutMs"] = int(v)
+    if v := _env("SCRAPE_BROWSER_REUSE"):
+        core["scrapeBrowserReuse"] = _as_bool(v)
+    if v := _env("SCRAPE_BROWSER_RECYCLE"):
+        core["scrapeBrowserRecycle"] = int(v)
+    if v := _env("SCRAPE_LAYOUT_TTL_SECONDS"):
+        core["scrapeLayoutTtlSeconds"] = float(v)
     if v := _env("CATALOG_BUDGET_SECONDS"):
         core["catalogBudgetSeconds"] = float(v)
     if v := _env("CATALOG_MIN_INTERVAL_MS"):

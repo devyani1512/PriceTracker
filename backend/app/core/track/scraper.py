@@ -6,6 +6,12 @@ browser. Everything here is defensive: the layout classes are read from
 ``/api/layout`` (with fallbacks), the reveal button is earned with real mouse
 movement, and the terminal success/error state of the price block is awaited
 explicitly instead of guessing after a fixed sleep.
+
+``BrowserSession`` starts Playwright + Chromium **once** and opens a fresh
+context/page per product, so a batch of scrapes doesn't pay browser startup for
+every product. The browser is recycled after a configurable number of scrapes to
+bound memory. Every phase is timed into ``ScrapeResult.timings`` so we can see
+where the time actually goes.
 """
 
 from __future__ import annotations
@@ -13,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 
 from playwright.async_api import (
     Page,
@@ -38,6 +45,19 @@ DEFAULT_CLASSES = {
     "badge": "bd-k2",
 }
 
+_LAUNCH_ARGS = [
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    # Trim the browser's memory footprint; nothing here needs GPU, extensions,
+    # media or background networking.
+    "--disable-gpu",
+    "--disable-extensions",
+    "--disable-background-networking",
+    "--disable-sync",
+    "--mute-audio",
+    "--no-first-run",
+]
+
 _READ_LEAF_TEXT_JS = """
 (el) => {
   const leaves = Array.from(el.querySelectorAll('span'))
@@ -53,21 +73,36 @@ _USER_AGENT = (
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
+LayoutLoader = Callable[[Page, str], Awaitable[tuple[dict, int | None]]]
+
+
+def _now() -> float:
+    return time.monotonic()
+
+
+def _ms(started: float) -> int:
+    return int((_now() - started) * 1000)
+
 
 class StructureChangedError(Exception):
     """The page rendered but no longer matches the structure we can parse."""
 
 
-async def dismiss_cookie_banner(page: Page) -> bool:
-    """Dismiss the cookie consent banner if present. Safe to call repeatedly."""
+async def dismiss_cookie_banner(page: Page, timeout_ms: int = 1000) -> bool:
+    """Dismiss the cookie consent banner if present. Safe to call repeatedly.
+
+    We check ``count()`` first (instant) instead of ``wait_for(visible)``, because
+    this runs ~3x per scrape and the banner is usually absent — waiting the full
+    timeout each time was the single biggest hidden cost. If the banner renders
+    late, the next check catches it. ``timeout_ms`` only bounds the click.
+    """
     try:
         accept = page.get_by_role("button", name="Accept cookies")
-        await accept.wait_for(state="visible", timeout=2500)
-        await accept.click()
-        await page.wait_for_timeout(150)
+        if await accept.count() == 0:
+            return False
+        await accept.first.click(timeout=timeout_ms)
+        await page.wait_for_timeout(50)
         return True
-    except PlaywrightTimeoutError:
-        return False
     except Exception:
         return False
 
@@ -95,6 +130,7 @@ async def _hover_until_ready(
     min_dwell_ms: int,
     timeout_ms: int,
     logger: logging.Logger,
+    banner_timeout_ms: int = 1000,
 ) -> None:
     """Earn the enabled state of the 'Reveal price' button with real mouse input.
 
@@ -109,7 +145,7 @@ async def _hover_until_ready(
 
     while True:
         attempt += 1
-        await dismiss_cookie_banner(page)
+        await dismiss_cookie_banner(page, banner_timeout_ms)
         box = await wrapper.first.bounding_box()
         if not box:
             raise RuntimeError("price-block has no bounding box (not rendered)")
@@ -194,18 +230,41 @@ async def _extract_quote(page: Page, classes: dict, logger: logging.Logger) -> d
     }
 
 
-async def _attempt(page: Page, url: str, cfg: dict, logger: logging.Logger) -> dict:
-    """One full scrape attempt against an already-open page."""
+async def _attempt(
+    page: Page,
+    url: str,
+    cfg: dict,
+    logger: logging.Logger,
+    load_classes: LayoutLoader,
+) -> tuple[dict, dict[str, float]]:
+    """One full scrape attempt against an already-open page.
+
+    Returns ``(data, timings)``. ``data`` either has an ``error`` key or the
+    parsed quote fields.
+    """
     timeout = int(cfg["Core"]["scrapeTimeoutMs"])
+    reveal_timeout = int(cfg["Core"].get("scrapeRevealTimeoutMs", 300000))
+    banner_timeout = int(cfg["Core"].get("cookieBannerTimeoutMs", 1000))
+    timings: dict[str, float] = {}
 
+    started = _now()
     await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
-    await dismiss_cookie_banner(page)
+    timings["gotoMs"] = _ms(started)
 
-    classes, revision = await _load_layout(page, cfg["Core"]["storefrontBase"], logger)
+    started = _now()
+    await dismiss_cookie_banner(page, banner_timeout)
+    timings["bannerAfterGotoMs"] = _ms(started)
+
+    started = _now()
+    classes, revision = await load_classes(page, cfg["Core"]["storefrontBase"])
+    timings["layoutMs"] = _ms(started)
 
     reveal = page.get_by_role("button", name="Reveal price")
+    started = _now()
     await reveal.wait_for(state="visible", timeout=timeout)
+    timings["revealButtonMs"] = _ms(started)
 
+    started = _now()
     await _hover_until_ready(
         page,
         page.locator(".price-block"),
@@ -214,23 +273,25 @@ async def _attempt(page: Page, url: str, cfg: dict, logger: logging.Logger) -> d
         int(cfg["Core"]["scrapeMinDwellMs"]),
         timeout,
         logger,
+        banner_timeout,
     )
+    timings["hoverMs"] = _ms(started)
 
-    await dismiss_cookie_banner(page)
+    started = _now()
+    await dismiss_cookie_banner(page, banner_timeout)
+    timings["bannerBeforeClickMs"] = _ms(started)
+    started = _now()
     await reveal.click()
-
     # Wait for the price block to reach a terminal state (success or error),
     # rather than assuming a fixed render delay. This is where slow/async
     # responses are absorbed, so it gets its own (long) budget — the storefront
     # can take minutes. Navigation/hover still use the shorter scrape timeout.
-    reveal_timeout = int(
-        cfg["Core"].get("scrapeRevealTimeoutMs", 300000)
-    )
     await page.wait_for_function(
         "() => document.querySelector('.price-block.price-success')"
         " || document.querySelector('.price-block.price-error')",
         timeout=reveal_timeout,
     )
+    timings["revealWaitMs"] = _ms(started)
 
     error_block = page.locator(".price-block.price-error")
     if await error_block.count():
@@ -239,11 +300,17 @@ async def _attempt(page: Page, url: str, cfg: dict, logger: logging.Logger) -> d
         if await sub.count():
             message = (await sub.first.inner_text()).strip()
         kind = "rate_limit" if ("429" in message or "rate" in message.lower()) else "unknown"
-        return {"error": message or "store returned an error state", "error_kind": kind, "layout_revision": revision}
+        return {
+            "error": message or "store returned an error state",
+            "error_kind": kind,
+            "layout_revision": revision,
+        }, timings
 
+    started = _now()
     quote = await _extract_quote(page, classes, logger)
+    timings["extractMs"] = _ms(started)
     quote["layout_revision"] = revision
-    return quote
+    return quote, timings
 
 
 def _classify_exception(exc: Exception) -> tuple[str, str]:
@@ -257,6 +324,213 @@ def _classify_exception(exc: Exception) -> tuple[str, str]:
     return "unknown", f"Error: {exc}"
 
 
+class BrowserSession:
+    """A long-lived Playwright + Chromium, reused across many product scrapes.
+
+    A fresh context (and page) is opened per product to keep cookies/fingerprint
+    state isolated. The browser is recycled after ``scrapeBrowserRecycle``
+    scrapes to bound memory growth.
+    """
+
+    def __init__(self, cfg: dict, logger: logging.Logger, headless: bool):
+        self.cfg = cfg
+        self.logger = logger
+        self.headless = headless
+        self.recycle_after = max(1, int(cfg["Core"].get("scrapeBrowserRecycle", 25)))
+        self.layout_ttl = max(0.0, float(cfg["Core"].get("scrapeLayoutTtlSeconds", 300)))
+        self._pw = None
+        self._browser = None
+        self._uses = 0
+        self.start_ms = 0
+        self._layout: dict | None = None
+        self._layout_revision: int | None = None
+        self._layout_at = 0.0
+
+    # ------------------------------------------------------------------ lifecycle
+    async def start(self) -> None:
+        started = _now()
+        self._pw = await async_playwright().start()
+        await self._launch()
+        self.start_ms = _ms(started)
+        self.logger.info("browser started in %dms", self.start_ms)
+
+    async def _launch(self) -> None:
+        self._browser = await self._pw.chromium.launch(
+            headless=self.headless, args=_LAUNCH_ARGS
+        )
+        self._uses = 0
+
+    async def _recycle(self) -> None:
+        if self._browser is not None:
+            try:
+                await self._browser.close()
+            except Exception:
+                self.logger.exception("closing recycled browser failed")
+            self._browser = None
+        await self._launch()
+
+    async def _maybe_recycle(self) -> None:
+        if self._uses >= self.recycle_after:
+            self.logger.info("recycling browser after %d scrapes", self._uses)
+            await self._recycle()
+
+    async def close(self) -> None:
+        if self._browser is not None:
+            try:
+                await self._browser.close()
+            except Exception:
+                pass
+            self._browser = None
+        if self._pw is not None:
+            try:
+                await self._pw.stop()
+            except Exception:
+                pass
+            self._pw = None
+
+    # ------------------------------------------------------------------ layout cache
+    async def _load_classes(self, page: Page, base_url: str) -> tuple[dict, int | None]:
+        now = _now()
+        if self._layout is not None and (now - self._layout_at) < self.layout_ttl:
+            return self._layout, self._layout_revision
+        classes, revision = await _load_layout(page, base_url, self.logger)
+        self._layout = classes
+        self._layout_revision = revision
+        self._layout_at = now
+        return classes, revision
+
+    # ------------------------------------------------------------------ scrape
+    async def _new_context(self):
+        params = {
+            "user_agent": _USER_AGENT,
+            "viewport": {"width": 1366, "height": 900},
+            "locale": "en-IN",
+        }
+        try:
+            return await self._browser.new_context(**params)
+        except Exception:
+            self.logger.exception("new_context failed; recycling browser")
+            await self._recycle()
+            return await self._browser.new_context(**params)
+
+    async def scrape(self, product_id: int, url: str) -> ScrapeResult:
+        await self._maybe_recycle()
+        result = ScrapeResult(product_id=product_id, url=url)
+        started = _now()
+
+        context_started = _now()
+        context = await self._new_context()
+        result.timings["contextMs"] = _ms(context_started)
+        result.timings["browserStartMs"] = self.start_ms
+
+        page = await context.new_page()
+        try:
+            await self._run_attempts(result, page, context, url)
+        finally:
+            try:
+                await context.close()
+            except Exception:
+                pass
+
+        self._uses += 1
+        result.duration_ms = _ms(started)
+        return result
+
+    async def _run_attempts(self, result: ScrapeResult, page: Page, context, url: str) -> None:
+        cfg = self.cfg
+        max_attempts = max(1, int(cfg["Core"]["scrapeMaxAttempts"]))
+
+        for attempt in range(1, max_attempts + 1):
+            attempt_started = _now()
+            try:
+                data, timings = await _attempt(
+                    page, url, cfg, self.logger, self._load_classes
+                )
+                for key, value in timings.items():
+                    result.timings[f"a{attempt}.{key}"] = value
+                duration = _ms(attempt_started)
+
+                if "error" in data:
+                    result.attempts_detail.append(
+                        ScrapeAttempt(
+                            attempt=attempt,
+                            success=False,
+                            duration_ms=duration,
+                            error=data["error"],
+                            error_kind=data.get("error_kind", "unknown"),
+                        )
+                    )
+                    result.error = data["error"]
+                    result.error_kind = data.get("error_kind", "unknown")
+                    result.layout_revision = data.get("layout_revision")
+                    self.logger.warning("attempt %d failed: %s", attempt, data["error"])
+                else:
+                    result.success = True
+                    result.price = data["price"]
+                    result.was_price = data["was_price"]
+                    result.discount_pct = data["discount_pct"]
+                    result.currency = data["currency"]
+                    result.in_stock = data["in_stock"]
+                    result.stock_label = data["stock_label"]
+                    result.stock_count = data["stock_count"]
+                    result.layout_revision = data["layout_revision"]
+                    result.attempts_detail.append(
+                        ScrapeAttempt(
+                            attempt=attempt,
+                            success=True,
+                            duration_ms=duration,
+                            price=data["price"],
+                            in_stock=data["in_stock"],
+                        )
+                    )
+                    self.logger.info(
+                        "attempt %d success: price=%s stock=%s",
+                        attempt,
+                        data["price"],
+                        data["stock_label"],
+                    )
+                    break
+
+            except Exception as exc:  # noqa: BLE001 - classify and record everything
+                duration = _ms(attempt_started)
+                kind, message = _classify_exception(exc)
+                result.attempts_detail.append(
+                    ScrapeAttempt(
+                        attempt=attempt,
+                        success=False,
+                        duration_ms=duration,
+                        error=message,
+                        error_kind=kind,
+                    )
+                )
+                result.error = message
+                result.error_kind = kind
+                self.logger.warning("attempt %d failed (%s): %s", attempt, kind, message)
+
+            # Fresh page for the next attempt so a half-loaded or error-state
+            # page never contaminates the retry.
+            if attempt < max_attempts:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+                page = await context.new_page()
+                await asyncio.sleep(min(0.5 * (2 ** (attempt - 1)), 5.0))
+
+        # Only call it a structure change if *every* attempt failed structurally.
+        structural = [a for a in result.attempts_detail if a.error_kind == "structure"]
+        if not result.success and structural and len(structural) == len(result.attempts_detail):
+            result.structure_changed = True
+            result.structure_note = structural[-1].error
+
+        result.attempts = len(result.attempts_detail) or 1
+        result.retried = len(result.attempts_detail) > 1
+        if not result.success and result.error_kind is None:
+            result.error_kind = "unknown"
+        if not result.success and result.error is None:
+            result.error = "scrape failed with no recorded error"
+
+
 async def run_browser_session(
     product_id: int,
     url: str,
@@ -264,122 +538,10 @@ async def run_browser_session(
     logger: logging.Logger,
     headless: bool,
 ) -> ScrapeResult:
-    """Open a browser, attempt the scrape up to N times, return the full result."""
-    result = ScrapeResult(product_id=product_id, url=url)
-    max_attempts = max(1, int(cfg["Core"]["scrapeMaxAttempts"]))
-    started = time.monotonic()
-
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=headless,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                # Trim the browser's memory footprint; nothing here needs GPU,
-                # extensions, media or background networking.
-                "--disable-gpu",
-                "--disable-extensions",
-                "--disable-background-networking",
-                "--disable-sync",
-                "--mute-audio",
-                "--no-first-run",
-            ],
-        )
-        context = await browser.new_context(
-            user_agent=_USER_AGENT,
-            viewport={"width": 1366, "height": 900},
-            locale="en-IN",
-        )
-        page = await context.new_page()
-        try:
-            for attempt in range(1, max_attempts + 1):
-                attempt_started = time.monotonic()
-                try:
-                    data = await _attempt(page, url, cfg, logger)
-                    duration = int((time.monotonic() - attempt_started) * 1000)
-
-                    if "error" in data:
-                        result.attempts_detail.append(
-                            ScrapeAttempt(
-                                attempt=attempt,
-                                success=False,
-                                duration_ms=duration,
-                                error=data["error"],
-                                error_kind=data.get("error_kind", "unknown"),
-                            )
-                        )
-                        result.error = data["error"]
-                        result.error_kind = data.get("error_kind", "unknown")
-                        result.layout_revision = data.get("layout_revision")
-                        logger.warning("attempt %d failed: %s", attempt, data["error"])
-                    else:
-                        result.success = True
-                        result.price = data["price"]
-                        result.was_price = data["was_price"]
-                        result.discount_pct = data["discount_pct"]
-                        result.currency = data["currency"]
-                        result.in_stock = data["in_stock"]
-                        result.stock_label = data["stock_label"]
-                        result.stock_count = data["stock_count"]
-                        result.layout_revision = data["layout_revision"]
-                        result.attempts_detail.append(
-                            ScrapeAttempt(
-                                attempt=attempt,
-                                success=True,
-                                duration_ms=duration,
-                                price=data["price"],
-                                in_stock=data["in_stock"],
-                            )
-                        )
-                        logger.info(
-                            "attempt %d success: price=%s stock=%s",
-                            attempt,
-                            data["price"],
-                            data["stock_label"],
-                        )
-                        break
-
-                except Exception as exc:  # noqa: BLE001 - we classify and record everything
-                    duration = int((time.monotonic() - attempt_started) * 1000)
-                    kind, message = _classify_exception(exc)
-                    result.attempts_detail.append(
-                        ScrapeAttempt(
-                            attempt=attempt,
-                            success=False,
-                            duration_ms=duration,
-                            error=message,
-                            error_kind=kind,
-                        )
-                    )
-                    result.error = message
-                    result.error_kind = kind
-                    logger.warning("attempt %d failed (%s): %s", attempt, kind, message)
-
-                # Fresh page for the next attempt so a half-loaded or
-                # error-state page never contaminates the retry.
-                if attempt < max_attempts:
-                    try:
-                        await page.close()
-                    except Exception:
-                        pass
-                    page = await context.new_page()
-                    await asyncio.sleep(min(0.5 * (2 ** (attempt - 1)), 5.0))
-        finally:
-            await context.close()
-            await browser.close()
-
-    # Only call it a structure change if *every* attempt failed structurally —
-    # a single missing container is usually a transient partial render.
-    structural = [a for a in result.attempts_detail if a.error_kind == "structure"]
-    if not result.success and structural and len(structural) == len(result.attempts_detail):
-        result.structure_changed = True
-        result.structure_note = structural[-1].error
-
-    result.attempts = len(result.attempts_detail) or 1
-    result.retried = len(result.attempts_detail) > 1
-    result.duration_ms = int((time.monotonic() - started) * 1000)
-    if not result.success and result.error_kind is None:
-        result.error_kind = "unknown"
-    if not result.success and result.error is None:
-        result.error = "scrape failed with no recorded error"
-    return result
+    """One-shot scrape: open a browser, attempt the scrape, close it again."""
+    session = BrowserSession(cfg, logger, headless)
+    await session.start()
+    try:
+        return await session.scrape(product_id, url)
+    finally:
+        await session.close()
