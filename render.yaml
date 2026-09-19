@@ -41,7 +41,9 @@ services:
       - key: SCHEDULED_TRACK_THREADS
         value: "1"           # scheduled lane; bounded so memory stays flat
       - key: CRON_INLINE_BUDGET_SECONDS
-        value: "25"          # must stay under cron-job.org's 30s request timeout
+        value: "25"          # only used when /cron/tick is called with ?drain=true
+      - key: SCRAPE_REVEAL_TIMEOUT_MS
+        value: "300000"      # price-reveal wait; storefront can be slow
       - key: CORS_ORIGINS
         sync: false          # e.g. https://your-app.vercel.app
       # Render's free plan blocks outbound SMTP (ports 25/465/587), so email

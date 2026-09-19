@@ -18,6 +18,9 @@ manualTrackThreads = 1
 scheduledTrackThreads = 1
 scrapeMaxAttempts = 3
 scrapeTimeoutMs = 45000
+# The price block can take a while to reach its terminal state after the reveal
+# click; give that wait its own (long) budget without stretching navigation.
+scrapeRevealTimeoutMs = 300000
 scrapeMinMoves = 8
 scrapeMinDwellMs = 700
 headless = true

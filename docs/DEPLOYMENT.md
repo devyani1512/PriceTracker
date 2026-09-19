@@ -85,15 +85,17 @@ and its system libraries are already present.
 ## 4. Scheduling
 
 Scheduled work is durable (a `tasks` table), so the driver is interchangeable:
-a tick enqueues what is due, then drains it for a bounded time. Anything left
-over stays queued for the next tick, and a lease reclaims work if the instance
-sleeps mid-run. We use **cron-job.org** because it is free.
+a tick enqueues what is due, and the background scheduled workers drain it.
+Anything left over stays queued for the next tick, and a lease reclaims work if
+the instance sleeps mid-run. We use **cron-job.org** because it is free.
 
 ### cron-job.org (free, recommended)
 
 cron-job.org allows unlimited jobs on fair use, with a **1-minute minimum
-interval** and a **30-second request timeout** on the free plan. `render.yaml`
-sets `CRON_INLINE_BUDGET_SECONDS=25` so a tick finishes under that timeout.
+interval** and a **30-second request timeout** on the free plan. `/cron/tick`
+is **fire-and-forget**: it enqueues due work, wakes the workers, and returns in
+well under a second, so the scheduler never times out. The workers then scrape
+in the background while the instance is awake.
 
 Create two jobs:
 
@@ -101,9 +103,9 @@ Create two jobs:
    - URL: `https://<your-render-service>.onrender.com/cron/tick`
    - Method: `POST`
    - Header: `X-Cron-Secret: <CRON_SECRET>` (the value Render generated)
-   - Enable **Retry on failure** if available. The endpoint enqueues every due
-     product and drains the queue inline for up to 25s, then returns. Unfinished
-     tasks are picked up by the in-process scheduled workers and the next tick.
+   - The response is a tiny JSON summary of what was enqueued. Work continues
+     after the response; unfinished tasks are picked up by the workers or the
+     next tick.
 2. **Alert dispatch** (optional) — every 30 minutes:
    - URL: `https://<your-render-service>.onrender.com/cron/notify`
    - Method: `POST`
@@ -112,11 +114,12 @@ Create two jobs:
 Notes for the free tier:
 
 - Render spins a free instance down after ~15 minutes without traffic. The cron
-  pings it every 10 minutes, which keeps it warm in practice; the first request
-  after a cold start can exceed 30s, so treat an occasional timeout as expected
-  and rely on the retry/next tick — **no scheduled work is lost**.
-- If you want the request to return instantly instead of draining inline, add
-  `?drain=false`; the background scheduled workers still process the queue.
+  pings it every 10 minutes, which keeps it warm in practice. The first request
+  after a cold start can still be slow while the container boots; enable
+  **Retry on failure** if available — **no scheduled work is lost** because the
+  queue is durable.
+- For a synchronous drain (debugging, or a one-shot runner), call
+  `/cron/tick?drain=true`; it then waits up to `CRON_INLINE_BUDGET_SECONDS`.
 - `GET /cron/status` (same header) returns the pending and due task counts, so
   you can confirm the queue is draining. `POST /cron/tick?force=true` bypasses
   snapshot reuse for a debugging re-scrape.

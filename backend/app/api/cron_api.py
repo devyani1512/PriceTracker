@@ -28,17 +28,19 @@ def _as_bool(value, default: bool) -> bool:
 @api_view(["POST"])
 @permission_classes([HasCronSecret])
 def cron_tick(request):
-    """External cron (Render Cron Job / cron-job.org) calls this on a schedule.
+    """External cron (cron-job.org) calls this on a schedule.
 
-    It enqueues every due scrape, then (by default) drains the queue inline for
-    up to ``budgetSeconds`` so this instance stays awake while it works. Work
-    that does not fit the budget stays in the durable queue and is picked up by
-    the next tick or by the scheduled workers.
+    By default it is fire-and-forget: it enqueues every due scrape, wakes the
+    background scheduled workers, and returns immediately, so the scheduler
+    never times out. The durable queue means the work still completes — the
+    workers drain it while the instance is awake, and anything left over is
+    picked up on the next tick. Pass ``?drain=true`` for a synchronous drain
+    (bounded by ``budgetSeconds``), handy for debugging or one-shot runners.
     """
     cfg = settings.PRICE_TRACKER["Core"]
     force = _as_bool(request.query_params.get("force"), False)
     scrape = _as_bool(request.query_params.get("scrape"), True)
-    drain = _as_bool(request.query_params.get("drain"), True)
+    drain = _as_bool(request.query_params.get("drain"), False)
     budget = request.query_params.get("budgetSeconds")
     budget_seconds = (
         float(budget)

@@ -221,11 +221,15 @@ async def _attempt(page: Page, url: str, cfg: dict, logger: logging.Logger) -> d
 
     # Wait for the price block to reach a terminal state (success or error),
     # rather than assuming a fixed render delay. This is where slow/async
-    # responses are absorbed.
+    # responses are absorbed, so it gets its own (long) budget — the storefront
+    # can take minutes. Navigation/hover still use the shorter scrape timeout.
+    reveal_timeout = int(
+        cfg["Core"].get("scrapeRevealTimeoutMs", 300000)
+    )
     await page.wait_for_function(
         "() => document.querySelector('.price-block.price-success')"
         " || document.querySelector('.price-block.price-error')",
-        timeout=timeout,
+        timeout=reveal_timeout,
     )
 
     error_block = page.locator(".price-block.price-error")

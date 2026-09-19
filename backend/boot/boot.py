@@ -50,6 +50,8 @@ def _apply_env_overrides(cfg: dict) -> dict:
         core["scrapeMaxAttempts"] = int(v)
     if v := _env("SCRAPE_TIMEOUT_MS"):
         core["scrapeTimeoutMs"] = int(v)
+    if v := _env("SCRAPE_REVEAL_TIMEOUT_MS"):
+        core["scrapeRevealTimeoutMs"] = int(v)
     if v := _env("CATALOG_BUDGET_SECONDS"):
         core["catalogBudgetSeconds"] = float(v)
     if v := _env("CATALOG_MIN_INTERVAL_MS"):
