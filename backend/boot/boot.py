@@ -39,9 +39,9 @@ def _apply_env_overrides(cfg: dict) -> dict:
         core["headless"] = _as_bool(v)
     if v := _env("SELF_TICK"):
         core["selfTick"] = _as_bool(v)
-    if v := _env("MAX_TRACK_THREADS"):
-        core["manualTrackThreads"] = int(v)
-        core["scheduledTrackThreads"] = int(v)
+    # MAX_TRACK_THREADS is retired: concurrency is now split across two lanes.
+    # It is intentionally ignored so a stale value cannot re-enable high
+    # concurrency; set MANUAL_TRACK_THREADS / SCHEDULED_TRACK_THREADS instead.
     if v := _env("MANUAL_TRACK_THREADS"):
         core["manualTrackThreads"] = int(v)
     if v := _env("SCHEDULED_TRACK_THREADS"):
