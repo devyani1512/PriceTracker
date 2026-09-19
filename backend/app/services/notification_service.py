@@ -58,17 +58,27 @@ class NotificationServiceMixin:
         return [n.entry() for n in self.db.notifications.list_for_user(user_id)]
 
     # ------------------------------------------------------------------ evaluate
+    def _emails_only_on_back_in_stock(self) -> bool:
+        return bool(self.cfg["Email"].get("backInStockOnly", True))
+
     def evaluate_snapshot(self, product_id: int, snapshot: PriceSnapshot) -> None:
-        """Cron hook: turn a fresh snapshot into alerts where rules match."""
+        """Cron hook: turn a fresh snapshot into alerts where rules match.
+
+        By default only the out-of-stock -> in-stock transition is emailed, to
+        protect the daily provider quota. Price-drop alerts are suppressed
+        entirely in that mode (set ``Email.backInStockOnly=false`` to restore).
+        """
         if snapshot.price is None and snapshot.in_stock is None:
             return
 
         previous = self.db.prices.previous_for_product(product_id, snapshot.captured_at)
         trackers = self.db.trackers.list_active_for_product(product_id)
+        only_stock = self._emails_only_on_back_in_stock()
 
         for tracker in trackers:
             if (
-                tracker.alert_on_price_drop
+                not only_stock
+                and tracker.alert_on_price_drop
                 and previous is not None
                 and previous.price
                 and snapshot.price is not None

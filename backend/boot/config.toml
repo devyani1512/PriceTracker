@@ -81,6 +81,9 @@ appPassword = ""
 apiKey = ""
 fromAddr = ""
 fromName = "Price Tracker"
+# Protect the daily send quota: only email on the out-of-stock -> in-stock
+# transition. Price-drop alerts are still shown in-app but not emailed.
+backInStockOnly = true
 
 [Security]
 jwtKey = ""

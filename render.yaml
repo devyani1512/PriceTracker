@@ -62,6 +62,8 @@ services:
         value: brevo
       - key: EMAIL_API_KEY
         sync: false          # Brevo API key
+      - key: EMAIL_BACK_IN_STOCK_ONLY
+        value: "true"        # only email on out-of-stock -> in-stock
       - key: SMTP_FROM
         sync: false          # verified sender address
       - key: SMTP_FROM_NAME

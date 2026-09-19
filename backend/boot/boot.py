@@ -118,6 +118,8 @@ def _apply_env_overrides(cfg: dict) -> dict:
         mail["fromAddr"] = v
     if v := _env("SMTP_FROM_NAME"):
         mail["fromName"] = v
+    if v := _env("EMAIL_BACK_IN_STOCK_ONLY"):
+        mail["backInStockOnly"] = _as_bool(v)
 
     if v := _env("JWTKEY"):
         sec["jwtKey"] = v
