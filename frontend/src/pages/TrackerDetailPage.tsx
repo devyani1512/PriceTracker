@@ -139,6 +139,14 @@ export function TrackerDetailPage() {
           }
         />
         <InlineError>{tracker.error ?? "Tracker not found."}</InlineError>
+        <Button
+          variant="secondary"
+          className="mt-3"
+          onClick={tracker.reload}
+          loading={tracker.loading}
+        >
+          Try again
+        </Button>
       </div>
     );
   }

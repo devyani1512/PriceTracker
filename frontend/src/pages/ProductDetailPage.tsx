@@ -170,6 +170,14 @@ export function ProductDetailPage() {
           }
         />
         <InlineError>{product.error}</InlineError>
+        <Button
+          variant="secondary"
+          className="mt-3"
+          onClick={product.reload}
+          loading={product.loading}
+        >
+          Try again
+        </Button>
       </div>
     );
   }
