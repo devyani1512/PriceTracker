@@ -19,7 +19,9 @@ services:
     healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
-        sync: false          # paste your Supabase connection string
+        sync: false          # Supabase TRANSACTION pooler (:6543) for the app
+      - key: DIRECT_DATABASE_URL
+        sync: false          # optional: direct/session pooler (:5432), used only for migrations
       - key: JWTKEY
         generateValue: true
       - key: CRON_SECRET

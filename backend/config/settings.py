@@ -37,6 +37,7 @@ def _database(cfg: dict) -> dict:
         "HOST": db.get("host", "127.0.0.1"),
         "PORT": str(db.get("port", 5432)),
         "CONN_MAX_AGE": 60,
+        "CONN_HEALTH_CHECKS": True,
         "OPTIONS": {"connect_timeout": 10},
     }
 

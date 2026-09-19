@@ -10,13 +10,26 @@ tier sleeps. A paid Render Cron Job is documented as an alternative — see
 ## 1. Supabase (database)
 
 1. Create a project at <https://supabase.com>.
-2. Project settings → Database → **Connection string**. Copy the URI.
-   - For a long-running Render service, the direct connection (`...:5432`) is fine.
-   - If you use the pooler, the URI looks like
-     `postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres`.
+2. Project settings → Database → **Connection string**. Copy two URIs:
+   - **`DATABASE_URL` — transaction pooler, port `6543`:**
+     `postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres`
+     This is what the app uses. Supavisor multiplexes many short-lived clients
+     over a few server connections, so request bursts don't exhaust it.
+   - **`DIRECT_DATABASE_URL` (optional) — session pooler or direct, port `5432`:**
+     used only for `migrate` at container start. DDL is happiest on a real
+     session.
 3. Tables are created by Django migrations. They run automatically at container
    start (`python manage.py migrate`) and locally via `make migrate`. To inspect
    data, use the Supabase table editor or the Django admin at `/django-admin/`.
+
+> **Why not the session pooler on `:5432`?** Supavisor session mode pins one
+> server connection per client and caps at `pool_size` (15 on the free tier).
+> Django opens one connection per database-touching thread, so a few concurrent
+> requests plus background workers hit `(EMAXCONNSESSION) max clients reached`.
+> The transaction pooler avoids that. For pooler hosts the app sets
+> `CONN_MAX_AGE=0` and disables psycopg's prepared statements, both of which are
+> required for transaction-mode pooling. Override with `DB_CONN_MAX_AGE` /
+> `DB_DISABLE_PREPARED_STATEMENTS` if needed.
 
 > Django accepts the Supabase URI as-is; `postgres://` is normalised to
 > `postgresql://` for you.
@@ -42,7 +55,8 @@ Important env vars:
 
 | Key | Value |
 | --- | --- |
-| `DATABASE_URL` | Supabase URI |
+| `DATABASE_URL` | Supabase **transaction** pooler URI (`:6543`) |
+| `DIRECT_DATABASE_URL` | optional direct/session URI (`:5432`) for migrations |
 | `JWTKEY` | long random string |
 | `CRON_SECRET` | long random string |
 | `CORS_ORIGINS` | `https://<your-vercel-app>.vercel.app` |

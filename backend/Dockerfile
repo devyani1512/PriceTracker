@@ -26,4 +26,7 @@ ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8080
 
 # Migrate, then serve the ASGI app (the lifespan hook starts the core).
-CMD ["sh", "-c", "python manage.py migrate --noinput && uvicorn config.asgi:application --host 0.0.0.0 --port ${PORT:-8080}"]
+# Migrations run against DIRECT_DATABASE_URL when set (a direct/Supabase session
+# connection), because DDL is happier on a real session than a transaction
+# pooler. The app itself always uses DATABASE_URL.
+CMD ["sh", "-c", "(DATABASE_URL=\"${DIRECT_DATABASE_URL:-$DATABASE_URL}\" python manage.py migrate --noinput) && uvicorn config.asgi:application --host 0.0.0.0 --port ${PORT:-8080}"]
