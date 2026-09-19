@@ -40,7 +40,12 @@ def _apply_env_overrides(cfg: dict) -> dict:
     if v := _env("SELF_TICK"):
         core["selfTick"] = _as_bool(v)
     if v := _env("MAX_TRACK_THREADS"):
-        core["maxTrackThreads"] = int(v)
+        core["manualTrackThreads"] = int(v)
+        core["scheduledTrackThreads"] = int(v)
+    if v := _env("MANUAL_TRACK_THREADS"):
+        core["manualTrackThreads"] = int(v)
+    if v := _env("SCHEDULED_TRACK_THREADS"):
+        core["scheduledTrackThreads"] = int(v)
     if v := _env("SCRAPE_MAX_ATTEMPTS"):
         core["scrapeMaxAttempts"] = int(v)
     if v := _env("SCRAPE_TIMEOUT_MS"):
@@ -53,6 +58,12 @@ def _apply_env_overrides(cfg: dict) -> dict:
         core["minRefreshMinutes"] = int(v)
     if v := _env("DEFAULT_REFRESH_MINUTES"):
         core["defaultRefreshMinutes"] = int(v)
+    if v := _env("ALLOWED_REFRESH_MINUTES"):
+        core["allowedRefreshMinutes"] = [int(m.strip()) for m in v.split(",") if m.strip()]
+    if v := _env("HISTORY_MAX_POINTS"):
+        core["historyMaxPoints"] = int(v)
+    if v := _env("CRON_INLINE_BUDGET_SECONDS"):
+        core["cronInlineBudgetSeconds"] = float(v)
 
     if v := _env("DATABASE_URL"):
         db["url"] = v

@@ -95,6 +95,15 @@ class UserAdmin(admin.ModelAdmin):
 
 @admin.register(Task)
 class TaskAdmin(admin.ModelAdmin):
-    list_display = ("job_id", "category", "run_at", "created_at")
-    list_filter = ("category",)
-    ordering = ("run_at",)
+    list_display = (
+        "job_id",
+        "category",
+        "priority",
+        "product_id",
+        "slot_at",
+        "run_at",
+        "attempts",
+        "locked_at",
+    )
+    list_filter = ("category", "priority")
+    ordering = ("priority", "run_at")

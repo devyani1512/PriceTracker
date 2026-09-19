@@ -1,19 +1,23 @@
-"""TrackCore — bounded-concurrency wrapper around the Playwright scraper.
+"""TrackCore — wrapper around the Playwright scraper.
 
-It owns a small thread pool (``Core.maxTrackThreads``) and the persistence of a
-run: one price snapshot on success, one scrape-log row per attempt, and the
-change-detection flag when the page structure no longer parses.
+Concurrency lives in the :class:`~app.core.jobs.runner.JobRunner`: user actions
+run on the high-priority manual lane, scheduled work on the bounded scheduled
+lane. TrackCore itself only persists a run: one price snapshot on success, one
+scrape-log row per attempt, and the change-detection flag when the page
+structure no longer parses.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from datetime import datetime
+from functools import partial
 
 from django.db import close_old_connections
 
+from app.core.jobs.runner import JobRunner
 from app.core.track.models import ScrapeResult
 from app.core.track.scraper import run_browser_session
 from app.entity.price import (
@@ -28,24 +32,25 @@ from app.utils.timeutil import align_to_interval, utcnow
 
 
 class TrackCore:
-    def __init__(self, logger: logging.Logger, cfg: dict, db, id_gen: IDGenerator):
+    def __init__(
+        self,
+        logger: logging.Logger,
+        cfg: dict,
+        db,
+        id_gen: IDGenerator,
+        runner: JobRunner,
+    ):
         self.logger = logger
         self.cfg = cfg
         self.db = db
         self.id_gen = id_gen
-        self.max_threads = max(1, int(cfg["Core"]["maxTrackThreads"]))
-        self.executor = ThreadPoolExecutor(
-            max_workers=self.max_threads, thread_name_prefix="track"
-        )
-        self.logger.info("TrackCore ready (maxThreads=%d)", self.max_threads)
+        self.runner = runner
+        self.logger.info("TrackCore ready (jobs=%s)", type(runner).__name__)
 
     # ------------------------------------------------------------------ helpers
     def product_url(self, product_id: int) -> str:
         base = str(self.cfg["Core"]["storefrontBase"]).rstrip("/")
         return f"{base}/product/{product_id}"
-
-    def shutdown(self) -> None:
-        self.executor.shutdown(wait=False, cancel_futures=True)
 
     # ------------------------------------------------------------------ public API
     def submit(
@@ -56,9 +61,15 @@ class TrackCore:
         slot_at: datetime | None = None,
         headless: bool | None = None,
     ) -> Future:
+        """Queue a scrape on the high-priority (manual) lane.
+
+        Used by user actions: refresh, tracking a product, first-load price.
+        Scheduled scrapes never call this — they run on the bounded scheduled
+        lane so they cannot starve user requests.
+        """
         slot = slot_at or align_to_interval(utcnow(), 1)
-        return self.executor.submit(
-            self._blocking_run, product_id, trigger, tracker_id, slot, headless
+        return self.runner.submit_manual(
+            partial(self._blocking_run, product_id, trigger, tracker_id, slot, headless)
         )
 
     def scrape_sync(
@@ -70,9 +81,18 @@ class TrackCore:
         headless: bool | None = None,
         timeout: float | None = None,
     ) -> ScrapeResult:
-        return self.submit(product_id, trigger, tracker_id, slot_at, headless).result(
-            timeout=timeout
+        """Run a scrape in the calling thread (scheduled workers, CLI, wait=true).
+
+        Running inline keeps the scheduled lane at the configured concurrency and
+        avoids a worker waiting on a pool that is itself the scheduled lane.
+        """
+        slot = slot_at or align_to_interval(utcnow(), 1)
+        run = partial(
+            self._blocking_run, product_id, trigger, tracker_id, slot, headless
         )
+        if timeout is None:
+            return run()
+        return self.runner.submit_manual(run).result(timeout=timeout)
 
     # ------------------------------------------------------------------ internals
     def _blocking_run(

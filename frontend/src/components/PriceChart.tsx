@@ -19,7 +19,9 @@ interface Datum {
 
 function toDatum(snapshot: Snapshot): Datum | null {
   if (snapshot.price === null || snapshot.price === undefined) return null;
-  const raw = snapshot.capturedAt || snapshot.slotAt;
+  // Plot on the canonical slot, not the capture moment: a 10:00 value fetched at
+  // 10:05 still belongs at 10:00, so the series stays evenly spaced.
+  const raw = snapshot.slotAt || snapshot.capturedAt;
   const time = new Date(raw).getTime();
   if (Number.isNaN(time)) return null;
   return { t: time, price: snapshot.price, snapshot };
@@ -46,7 +48,7 @@ function PriceTooltip({
     <div className="rounded border border-line bg-white px-2.5 py-1.5 text-[12px] shadow-sm">
       <div className="text-ink">{formatCurrency(datum.price, currency)}</div>
       <div className="text-ink-faint">
-        {formatDateTime(datum.snapshot.capturedAt || datum.snapshot.slotAt)}
+        {formatDateTime(datum.snapshot.slotAt || datum.snapshot.capturedAt)}
       </div>
     </div>
   );

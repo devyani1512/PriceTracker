@@ -1,6 +1,13 @@
-# Render blueprint — the backend runs as a Docker web service because it needs
-# Chromium for the scraper. Free plan sleeps, which is exactly why scheduling is
-# driven by an external cron hitting /cron/tick (see docs/DEPLOYMENT.md).
+# Render blueprint. The backend runs as a Docker web service because it needs
+# Chromium for scraping. The free plan sleeps when idle, so scheduling is driven
+# by an external cron (cron-job.org) hitting POST /cron/tick every 10 minutes.
+#
+# Scheduled work is durable (a `tasks` table): a tick enqueues what is due and
+# drains it inline for up to CRON_INLINE_BUDGET_SECONDS, so the instance stays
+# awake while it works and anything unfinished resumes on the next tick. If you
+# would rather not use an external scheduler, you can instead run
+# `python manage.py run_jobs` from a paid Render Cron Job (see docs/DEPLOYMENT.md).
+
 services:
   - type: web
     name: price-tracker-backend
@@ -26,9 +33,13 @@ services:
       - key: HEADLESS
         value: "true"
       - key: SELF_TICK
-        value: "false"       # external cron drives ticks in production
-      - key: MAX_TRACK_THREADS
-        value: "3"
+        value: "false"       # cron-job.org drives ticks
+      - key: MANUAL_TRACK_THREADS
+        value: "1"           # user "Refresh" lane — keep it fast and small
+      - key: SCHEDULED_TRACK_THREADS
+        value: "1"           # scheduled lane; bounded so memory stays flat
+      - key: CRON_INLINE_BUDGET_SECONDS
+        value: "25"          # must stay under cron-job.org's 30s request timeout
       - key: CORS_ORIGINS
         sync: false          # e.g. https://your-app.vercel.app
       - key: SMTP_HOST

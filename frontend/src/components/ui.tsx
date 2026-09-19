@@ -2,6 +2,7 @@ import type {
   ButtonHTMLAttributes,
   InputHTMLAttributes,
   ReactNode,
+  SelectHTMLAttributes,
 } from "react";
 import { cn } from "../lib/utils";
 import type { NotificationStatus, NotificationType, ScrapeOutcome } from "../api";
@@ -394,6 +395,24 @@ export function Input({
         className,
       )}
     />
+  );
+}
+
+export function Select({
+  className,
+  children,
+  ...rest
+}: SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <select
+      {...rest}
+      className={cn(
+        "h-8 w-full rounded border border-line bg-white px-2 text-[13px] text-ink focus:border-ink-faint focus:outline-none focus-visible:ring-2 focus-visible:ring-ink/10",
+        className,
+      )}
+    >
+      {children}
+    </select>
   );
 }
 

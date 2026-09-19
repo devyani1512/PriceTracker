@@ -84,10 +84,18 @@ class PriceRepo:
         return list(queryset.order_by("captured_at")[:limit])
 
     def history_for_product(self, product_id: int, since=None, limit: int = 2000):
+        """Most recent ``limit`` shared snapshots, returned oldest-first.
+
+        Newest-first selection matters now that a tracker charts the product's
+        full shared history: we would rather keep the latest window than the
+        oldest when a long range exceeds the cap.
+        """
         queryset = PriceSnapshot.objects.filter(product_id=product_id)
         if since is not None:
             queryset = queryset.filter(captured_at__gte=since)
-        return list(queryset.order_by("captured_at")[:limit])
+        rows = list(queryset.order_by("-captured_at")[:limit])
+        rows.reverse()
+        return rows
 
     def delete_history_for_tracker(self, tracker_id: str) -> int:
         deleted, _ = TrackerHistory.objects.filter(tracker_id=tracker_id).delete()

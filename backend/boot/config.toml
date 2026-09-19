@@ -10,7 +10,12 @@ catalogTotal = 1000
 catalogPageSize = 60
 catalogMinIntervalMs = 600
 catalogBudgetSeconds = 240
-maxTrackThreads = 3
+# Job runner lanes. Manual jobs (a user pressing "Refresh") get their own
+# high-priority lane so they never queue behind scheduled scrapes. Scheduled
+# jobs drain from the durable `tasks` table one (or a few) at a time to bound
+# Chromium memory.
+manualTrackThreads = 1
+scheduledTrackThreads = 1
 scrapeMaxAttempts = 3
 scrapeTimeoutMs = 45000
 scrapeMinMoves = 8
@@ -20,9 +25,22 @@ selfTick = true
 tickSeconds = 60
 minRefreshMinutes = 10
 defaultRefreshMinutes = 120
-historyRetentionDays = 90
+# Only these cadences are offered, so every coarser cadence is a multiple of the
+# finer ones and history can be re-bucketed without losing points.
+allowedRefreshMinutes = [10, 30, 60, 120]
+# Durable job queue / worker tuning.
+scheduledPollSeconds = 15
+scheduledLeaseSeconds = 600
+jobMaxAttempts = 2
+jobRetryBackoffSeconds = 30
+maxTaskAgeSeconds = 7200
+historyMaxPoints = 20000
 cronBatchLimit = 50
 cronBudgetSeconds = 240
+# Inline drain budget for POST /cron/tick. cron-job.org's free plan times a
+# request out after 30s, so keep this comfortably below that. Unfinished work
+# stays in the durable queue for the next tick.
+cronInlineBudgetSeconds = 25
 
 [DB]
 host = "127.0.0.1"

@@ -7,30 +7,38 @@ from datetime import timedelta
 from app.entity.price import SnapshotTrigger
 from app.entity.tracker import Tracker
 from app.services.errors import NotFound, ValidationError
+from app.utils.history import project_history
 from app.utils.timeutil import utcnow
 
 
 class TrackerServiceMixin:
     # ------------------------------------------------------------------ helpers
+    def _allowed_refresh(self) -> list[int]:
+        configured = self.cfg["Core"].get("allowedRefreshMinutes")
+        return [int(m) for m in (configured or [10, 30, 60, 120])]
+
     def _min_refresh(self) -> int:
-        return int(self.cfg["Core"]["minRefreshMinutes"])
+        return min(self._allowed_refresh())
 
     def _default_refresh(self) -> int:
         return int(self.cfg["Core"]["defaultRefreshMinutes"])
 
+    def _history_max_points(self) -> int:
+        return int(self.cfg["Core"].get("historyMaxPoints", 20000))
+
     def _validate_refresh(self, minutes: int | None) -> int:
+        allowed = self._allowed_refresh()
         if minutes is None:
             return self._default_refresh()
         try:
             minutes = int(minutes)
         except (TypeError, ValueError) as exc:
             raise ValidationError("refreshMinutes must be an integer") from exc
-        if minutes < self._min_refresh():
+        if minutes not in allowed:
             raise ValidationError(
-                f"refreshMinutes must be at least {self._min_refresh()} minutes"
+                "refreshMinutes must be one of: "
+                + ", ".join(str(m) for m in sorted(allowed))
             )
-        if minutes > 60 * 24 * 30:
-            raise ValidationError("refreshMinutes is unreasonably large")
         return minutes
 
     def _owned_tracker(self, user_id: str, tracker_id: str) -> Tracker:
@@ -117,16 +125,9 @@ class TrackerServiceMixin:
         if new_minutes is not None:
             new_minutes = self._validate_refresh(new_minutes)
             if new_minutes != tracker.refresh_minutes:
-                # Spec: changing cadence deletes the user's records captured
-                # under the old timing. Shared snapshots stay for other users.
-                deleted = self.db.prices.delete_history_for_tracker(tracker.id)
-                self.logger.info(
-                    "tracker %s cadence %d -> %d; deleted %d history rows",
-                    tracker.id,
-                    tracker.refresh_minutes,
-                    new_minutes,
-                    deleted,
-                )
+                # History is never deleted on a cadence change. The chart simply
+                # re-buckets the product's shared snapshots onto the new grid:
+                # coarser cadences show a subset, finer ones reveal more.
                 tracker.refresh_minutes = new_minutes
                 tracker.last_covered_slot = None
 
@@ -155,9 +156,16 @@ class TrackerServiceMixin:
 
     # ------------------------------------------------------------------ history
     def tracker_history(self, user_id: str, tracker_id: str, days: int | None = None) -> dict:
-        self._owned_tracker(user_id, tracker_id)
+        tracker = self._owned_tracker(user_id, tracker_id)
         since = utcnow() - timedelta(days=days) if days else None
-        points = [p.point() for p in self.db.prices.history_for_tracker(tracker_id, since)]
+        # Chart the product's shared history, not just this tracker's links:
+        # a new tracker sees what already exists, and switching cadence never
+        # drops earlier points. Points are folded onto the tracker's grid.
+        max_points = self._history_max_points()
+        snapshots = self.db.prices.history_for_product(
+            tracker.product_id, since, limit=max_points
+        )
+        points = project_history(snapshots, tracker.refresh_minutes, max_points)
         prices = [p["price"] for p in points if p["price"] is not None]
         stats = {
             "count": len(points),

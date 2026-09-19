@@ -38,9 +38,10 @@ class ServiceLayer(
     def wire_core(self) -> None:
         """Connect core hooks to services without core importing services."""
         self.core.cron.snapshot_hook = self.evaluate_snapshot
-        self.core.scheduler.register(
+        self.core.jobs.register(
             JobType.NOTIFICATION, lambda task: self.dispatch_pending()
         )
-        self.core.scheduler.register(
+        self.core.jobs.register(
             JobType.CATALOG_SYNC, lambda task: self.sync_catalog()
         )
+        self.core.jobs.register(JobType.TRACK, self.core.cron.run_track_task)

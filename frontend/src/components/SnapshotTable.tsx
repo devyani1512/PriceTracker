@@ -21,8 +21,8 @@ export function SnapshotTable({
   const rows = [...points]
     .sort(
       (a, b) =>
-        new Date(b.capturedAt || b.slotAt).getTime() -
-        new Date(a.capturedAt || a.slotAt).getTime(),
+        new Date(b.slotAt || b.capturedAt).getTime() -
+        new Date(a.slotAt || a.capturedAt).getTime(),
     )
     .slice(0, limit ?? points.length);
 
@@ -31,7 +31,7 @@ export function SnapshotTable({
       <table className="w-full border-collapse text-[12px]">
         <thead>
           <tr className="border-b border-line text-left text-[11px] uppercase tracking-wide text-ink-faint">
-            <th className="py-2 pr-3 font-medium">Captured</th>
+            <th className="py-2 pr-3 font-medium">Slot</th>
             <th className="py-2 pr-3 font-medium">Price</th>
             <th className="py-2 pr-3 font-medium">Was</th>
             <th className="py-2 pr-3 font-medium">Disc.</th>
@@ -43,7 +43,7 @@ export function SnapshotTable({
           {rows.map((point) => (
             <tr key={point.id} className="border-b border-line last:border-0">
               <td className="whitespace-nowrap py-2 pr-3 text-ink-secondary">
-                {formatDateTime(point.capturedAt || point.slotAt)}
+                {formatDateTime(point.slotAt || point.capturedAt)}
               </td>
               <td className="whitespace-nowrap py-2 pr-3 font-medium text-ink">
                 {formatCurrency(point.price, point.currency)}

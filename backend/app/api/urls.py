@@ -38,6 +38,7 @@ urlpatterns = [
     path("notification/list", tracker_api.list_notifications, name="notification-list"),
     # cron + admin
     path("cron/tick", cron_api.cron_tick, name="cron-tick"),
+    path("cron/status", cron_api.cron_status, name="cron-status"),
     path("cron/notify", cron_api.cron_notify, name="cron-notify"),
     path("admin/catalog/sync", cron_api.catalog_sync, name="catalog-sync"),
 ]

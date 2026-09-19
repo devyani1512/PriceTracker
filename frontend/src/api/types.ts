@@ -25,6 +25,7 @@ export interface Snapshot {
   id: string;
   productId: number;
   slotAt: string;
+  bucketAt?: string | null;
   capturedAt: string;
   price: number | null;
   wasPrice: number | null;

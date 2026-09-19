@@ -29,11 +29,26 @@ on a schedule, storing history and an honest per-product scrape log.
 ### Scheduled scraping
 
 Every tracker is aligned to a grid based at **00:00 UTC** using its own interval
-(minimum 10 minutes, default 2 hours). On each tick the cron core groups due
-trackers by product, reuses a snapshot already captured inside the current slot
-window if one exists, and otherwise triggers **one** scrape for that product.
-Changing a tracker's cadence deletes that user's history rows (shared snapshots
-are untouched).
+(one of **10m / 30m / 1h / 2h**, default 2h). A tick is cheap and durable: it
+groups due trackers by product, reuses a snapshot already captured inside the
+current slot window if one exists, and otherwise writes **one** `tasks` row per
+product (deduped by product + slot). The process can sleep or be killed at any
+point — the queue is the source of truth.
+
+A tick never blocks on a scrape. Work is drained by a **priority job runner**:
+
+- **manual lane** — a user pressing *Refresh* runs immediately, on its own small
+  thread pool, so it never queues behind a cron batch;
+- **scheduled lane** — drains the durable queue at bounded concurrency (default
+  1) so Chromium memory stays flat.
+
+Because scheduled work is durable, it can be driven either by an in-process
+ticker, by an external cron hitting `POST /cron/tick`, or by a native Render
+Cron Job running `manage.py run_jobs` (which boots, drains, and exits).
+
+Changing a tracker's cadence never deletes history: the chart re-folds the
+product's shared snapshots onto the new grid, so a coarser cadence shows a
+subset and a finer one reveals more as new scrapes arrive.
 
 ---
 
@@ -42,9 +57,11 @@ are untouched).
 Core:
 
 - Search by partial/full product name; browse the catalog
-- Add/remove trackers; configurable cadence per product
-- Scheduled scraping with retries and shared snapshots
-- Price & stock history (chart + table)
+- Add/remove trackers; cadence per product (10m / 30m / 1h / 2h)
+- Durable scheduled scraping with retries, shared snapshots and a
+  priority job runner (manual refreshes never wait behind cron work)
+- Price & stock history (chart + table); cadence changes keep all earlier
+  points, a new tracker immediately sees the product's existing pricing
 - Per-product scrape log: every attempt with timestamp, outcome
   (`success` / `retried` / `failed`), duration and error
 - Headed (observable) run via the CLI
@@ -85,7 +102,8 @@ uv run python manage.py scrape 138 --repeat 3 --interval 15 --headed
 ```bash
 cd backend
 uv run python manage.py migrate     # apply migrations
-uv run python manage.py cron        # one cron pass
+uv run python manage.py cron        # one tick: enqueue + drain the queue
+uv run python manage.py run_jobs --budget 240   # drain once, then exit (cron)
 uv run python manage.py catalog     # force a full catalog sync
 uv run python manage.py runserver   # plain Django dev server (no background core)
 ```
@@ -137,7 +155,8 @@ Cron/admin (header `X-Cron-Secret`):
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/cron/tick` | run due scheduled scrapes |
+| POST | `/cron/tick` | enqueue due scrapes and drain the queue |
+| GET | `/cron/status` | queue depth (pending + due tasks) |
 | POST | `/cron/notify` | dispatch pending alert emails |
 | POST | `/admin/catalog/sync` | force a catalog sync |
 
@@ -156,7 +175,7 @@ price_tracker/
 │       ├── services/            # business logic (user/product/tracker/notification)
 │       ├── internal/postgresql/ # one query file per entity (Django ORM)
 │       ├── entity/              # Django models
-│       ├── core/                # track (Playwright), cron, scheduler, catalog
+│       ├── core/                # track (Playwright), cron, jobs, catalog
 │       ├── management/          # cron / catalog / scrape commands
 │       └── utils/               # idgen, time alignment, security, http
 ├── frontend/                    # React + Vite + Tailwind (Notion-style)
@@ -170,4 +189,6 @@ price_tracker/
 
 See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). In short: Render runs the
 Playwright-based Docker image, Vercel serves the SPA, Supabase provides
-Postgres, and cron-job.org hits `/cron/tick` every 10 minutes.
+Postgres, and **cron-job.org** (free) hits `/cron/tick` every 10 minutes. The
+same queue can also be drained by a paid Render Cron Job running
+`manage.py run_jobs`.

@@ -268,7 +268,18 @@ async def run_browser_session(
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=headless,
-            args=["--no-sandbox", "--disable-dev-shm-usage"],
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                # Trim the browser's memory footprint; nothing here needs GPU,
+                # extensions, media or background networking.
+                "--disable-gpu",
+                "--disable-extensions",
+                "--disable-background-networking",
+                "--disable-sync",
+                "--mute-audio",
+                "--no-first-run",
+            ],
         )
         context = await browser.new_context(
             user_agent=_USER_AGENT,

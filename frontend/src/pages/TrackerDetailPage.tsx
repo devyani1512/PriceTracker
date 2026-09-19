@@ -17,6 +17,7 @@ import {
   Input,
   PageHeader,
   Panel,
+  Select,
   SkeletonRows,
   Toggle,
 } from "../components/ui";
@@ -27,6 +28,22 @@ interface FormState {
   alertOnPriceDrop: boolean;
   priceDropThresholdPct: number;
   alertOnBackInStock: boolean;
+}
+
+// Kept in sync with Core.allowedRefreshMinutes on the backend. Each cadence is a
+// multiple of the finer ones, so history can be re-bucketed without gaps.
+const REFRESH_OPTIONS = [10, 30, 60, 120];
+
+function cadenceLabel(minutes: number): string {
+  if (minutes < 60) return `${minutes} minutes`;
+  return `${minutes / 60} hour${minutes === 60 ? "" : "s"}`;
+}
+
+// Keep a legacy value selectable so an existing tracker is never silently
+// rewritten; saving will move it onto one of the allowed cadences.
+function cadenceOptions(current: number): number[] {
+  if (REFRESH_OPTIONS.includes(current)) return REFRESH_OPTIONS;
+  return [...REFRESH_OPTIONS, current].sort((a, b) => a - b);
 }
 
 export function TrackerDetailPage() {
@@ -182,17 +199,15 @@ export function TrackerDetailPage() {
         <div className="space-y-6">
           <Panel
             title="Tracker settings"
-            action={<span className="text-[11px] text-ink-faint">min cadence 10 min</span>}
+            action={<span className="text-[11px] text-ink-faint">10m · 30m · 1h · 2h</span>}
           >
             {form ? (
               <div className="space-y-4">
                 <Field
-                  label="Refresh cadence (minutes)"
-                  hint="How often this product is checked."
+                  label="Refresh cadence"
+                  hint="How often this product is checked. History is kept when you change it."
                 >
-                  <Input
-                    type="number"
-                    min={10}
+                  <Select
                     value={form.refreshMinutes}
                     onChange={(event) =>
                       setForm({
@@ -200,13 +215,20 @@ export function TrackerDetailPage() {
                         refreshMinutes: Number(event.target.value),
                       })
                     }
-                  />
+                  >
+                    {cadenceOptions(form.refreshMinutes).map((option) => (
+                      <option key={option} value={option}>
+                        {cadenceLabel(option)}
+                      </option>
+                    ))}
+                  </Select>
                 </Field>
 
                 {cadenceChanged ? (
-                  <Banner tone="warning" title="Changing cadence deletes stored history.">
-                    Saved price snapshots for this tracker will be cleared when
-                    you save a new cadence.
+                  <Banner tone="info" title="Cadence will change on save.">
+                    History is not deleted. A coarser cadence shows fewer points
+                    from the same data; a finer one reveals more as new scrapes
+                    arrive.
                   </Banner>
                 ) : null}
 

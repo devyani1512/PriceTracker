@@ -1,8 +1,9 @@
 # Deployment
 
 Targets: **Vercel** (frontend), **Render** (backend), **Supabase** (PostgreSQL),
-plus **cron-job.org** to trigger scheduled scrapes because Render's free tier
-sleeps.
+and **cron-job.org** (free) to drive scheduled scrapes because Render's free
+tier sleeps. A paid Render Cron Job is documented as an alternative — see
+[Scheduling](#4-scheduling).
 
 ---
 
@@ -48,6 +49,9 @@ Important env vars:
 | `DJANGO_DEBUG` | `false` |
 | `ALLOWED_HOSTS` | `.onrender.com` |
 | `SELF_TICK` | `false` (external cron drives ticks) |
+| `MANUAL_TRACK_THREADS` | `1` (user "Refresh" lane) |
+| `SCHEDULED_TRACK_THREADS` | `1` (scheduled lane; memory stays flat) |
+| `CRON_INLINE_BUDGET_SECONDS` | `25` (under cron-job.org's 30s timeout) |
 | `STOREFRONT_BASE` | `https://demo.inelabteamdev.com` |
 
 The Docker image is based on `mcr.microsoft.com/playwright/python`, so Chromium
@@ -61,27 +65,74 @@ and its system libraries are already present.
 4. Env var `VITE_API_URL=https://<your-render-service>.onrender.com`.
 5. Deploy. `frontend/vercel.json` rewrites all routes to `index.html` for the SPA.
 
-## 4. cron-job.org (scheduling)
+## 4. Scheduling
 
-Render free instances sleep, so an external trigger is required.
+Scheduled work is durable (a `tasks` table), so the driver is interchangeable:
+a tick enqueues what is due, then drains it for a bounded time. Anything left
+over stays queued for the next tick, and a lease reclaims work if the instance
+sleeps mid-run. We use **cron-job.org** because it is free.
 
-Create two cron jobs:
+### cron-job.org (free, recommended)
+
+cron-job.org allows unlimited jobs on fair use, with a **1-minute minimum
+interval** and a **30-second request timeout** on the free plan. `render.yaml`
+sets `CRON_INLINE_BUDGET_SECONDS=25` so a tick finishes under that timeout.
+
+Create two jobs:
 
 1. **Scrape tick** — every 10 minutes:
-   - URL: `https://<render>/cron/tick`
+   - URL: `https://<your-render-service>.onrender.com/cron/tick`
+   - Method: `POST`
+   - Header: `X-Cron-Secret: <CRON_SECRET>` (the value Render generated)
+   - Enable **Retry on failure** if available. The endpoint enqueues every due
+     product and drains the queue inline for up to 25s, then returns. Unfinished
+     tasks are picked up by the in-process scheduled workers and the next tick.
+2. **Alert dispatch** (optional) — every 30 minutes:
+   - URL: `https://<your-render-service>.onrender.com/cron/notify`
    - Method: `POST`
    - Header: `X-Cron-Secret: <CRON_SECRET>`
-   - This aligns each tracker to its own cadence (default 2 hours, minimum
-     10 minutes) and reuses shared snapshots so a product is scraped once per
-     slot no matter how many users track it.
 
-2. **Alert dispatch** (optional) — every 30 minutes:
-   - URL: `https://<render>/cron/notify`
-   - Header: `X-Cron-Secret: <CRON_SECRET>`
+Notes for the free tier:
 
-Any scheduler that can send a POST with a custom header works. If the request
-exceeds the scheduler's timeout, reduce `cronBatchLimit` / raise the cron
-frequency: each tick is idempotent and bounded by `cronBudgetSeconds`.
+- Render spins a free instance down after ~15 minutes without traffic. The cron
+  pings it every 10 minutes, which keeps it warm in practice; the first request
+  after a cold start can exceed 30s, so treat an occasional timeout as expected
+  and rely on the retry/next tick — **no scheduled work is lost**.
+- If you want the request to return instantly instead of draining inline, add
+  `?drain=false`; the background scheduled workers still process the queue.
+- `GET /cron/status` (same header) returns the pending and due task counts, so
+  you can confirm the queue is draining. `POST /cron/tick?force=true` bypasses
+  snapshot reuse for a debugging re-scrape.
+
+### Alternative — Render Cron Job (paid)
+
+If you would rather keep everything inside Render, add a `type: cron` service
+that runs the one-shot drainer instead of `/cron/tick`:
+
+```yaml
+- type: cron
+  name: price-tracker-jobs
+  runtime: docker
+  plan: 1c-2g                 # Chromium needs headroom
+  region: singapore
+  schedule: "*/10 * * * *"
+  dockerfilePath: ./backend/Dockerfile
+  dockerContext: ./backend
+  dockerCommand: sh -c "python manage.py migrate --noinput && python manage.py run_jobs --budget 240"
+  envVars:
+    - key: DATABASE_URL
+      fromService: { name: price-tracker-backend, type: web, envVarKey: DATABASE_URL }
+    # ... STOREFRONT_BASE, HEADLESS, SELF_TICK=false, SMTP_*
+```
+
+Each run boots a fresh container, drains the queue, and exits. Render Cron Jobs
+require a paid plan (prorated, ~$1/month minimum), which is why cron-job.org is
+the default here.
+
+### Local dev — in-process ticker
+
+`SELF_TICK=true` (the default outside Render) runs a tick every `tickSeconds`.
+Never enable this on the free Render web service.
 
 ## 5. Gmail app password (email alerts)
 
