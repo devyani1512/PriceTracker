@@ -15,6 +15,7 @@ import time
 from django.core.management.base import BaseCommand
 
 from app.core.bootstrap import get_core
+from app.core.track.core import TrackRequest
 
 _PHASES = (
     "browserStartMs",
@@ -47,10 +48,21 @@ class Command(BaseCommand):
         parser.add_argument("--headed", action="store_true")
         parser.add_argument("--no-reuse", action="store_true", help="only the no-reuse path")
         parser.add_argument("--reuse", action="store_true", help="only the reuse path")
+        parser.add_argument(
+            "--many",
+            action="store_true",
+            help="scrape all ids in one batch (browser + page concurrency)",
+        )
+        parser.add_argument("--concurrency", type=int, default=None, help="pages per batch")
 
     def handle(self, *args, **options):
         core = get_core()
         headless = not options["headed"]
+
+        if options["many"]:
+            self._run_many(core, options, headless)
+            return
+
         if options["reuse"]:
             modes = [True]
         elif options["no_reuse"]:
@@ -78,6 +90,30 @@ class Command(BaseCommand):
         if len(results) == 2:
             self._compare(results["no-reuse"], results["reuse"])
         core.track.close_thread_session()
+
+    def _run_many(self, core, options, headless: bool) -> None:
+        if options["concurrency"] is not None:
+            core.cfg["Core"]["scrapePageConcurrency"] = max(1, int(options["concurrency"]))
+        concurrency = max(1, int(core.cfg["Core"].get("scrapePageConcurrency", 1)))
+        product_ids = options["product_id"]
+        self.stdout.write(
+            self.style.MIGRATE_HEADING(f"\n=== batch (concurrency={concurrency}) ===")
+        )
+        requests = [TrackRequest(product_id=pid) for pid in product_ids]
+        started = time.monotonic()
+        results = core.track.scrape_many(requests, headless=headless, persist=False)
+        wall = int((time.monotonic() - started) * 1000)
+        by_id = {req.product_id: result for req, result in results}
+        for product_id in product_ids:
+            result = by_id.get(product_id)
+            if result is None:
+                self.stdout.write(f"  product {product_id}: skipped (deadline)")
+                continue
+            self._print_row(product_id, 1, result, result.duration_ms)
+        self.stdout.write(
+            f"  batch wall={wall}ms for {len(product_ids)} products "
+            f"(concurrency={concurrency})"
+        )
 
     def _print_row(self, product_id: int, repeat: int, result, wall: int) -> None:
         status = "ok" if result.success else "FAIL"

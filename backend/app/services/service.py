@@ -44,4 +44,4 @@ class ServiceLayer(
         self.core.jobs.register(
             JobType.CATALOG_SYNC, lambda task: self.sync_catalog()
         )
-        self.core.jobs.register(JobType.TRACK, self.core.cron.run_track_task)
+        self.core.jobs.register_batch(JobType.TRACK, self.core.cron.run_track_tasks)

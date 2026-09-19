@@ -33,6 +33,12 @@ cookieBannerTimeoutMs = 1000
 scrapeBrowserReuse = true
 scrapeBrowserRecycle = 25
 scrapeLayoutTtlSeconds = 300
+# Hard cap per product (attempts included). When exceeded we stop and move on;
+# the durable task is retried on a later tick, so one flaky product can't stall
+# the whole batch. 0 disables it.
+scrapeProductBudgetMs = 120000
+# How many products to scrape concurrently inside one browser (own context each).
+scrapePageConcurrency = 2
 headless = true
 selfTick = true
 tickSeconds = 60

@@ -19,6 +19,7 @@ import asyncio
 import logging
 import threading
 from concurrent.futures import Future
+from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
 
@@ -26,7 +27,11 @@ from django.db import close_old_connections
 
 from app.core.jobs.runner import JobRunner
 from app.core.track.models import ScrapeResult
-from app.core.track.scraper import BrowserSession, run_browser_session
+from app.core.track.scraper import (
+    BrowserSession,
+    run_browser_batch,
+    run_browser_session,
+)
 from app.entity.price import (
     PriceSnapshot,
     ScrapeErrorKind,
@@ -45,6 +50,15 @@ class _ThreadSession:
         self.loop = asyncio.new_event_loop()
         self.session: BrowserSession | None = None
         self.headless: bool | None = None
+
+
+@dataclass
+class TrackRequest:
+    """One product to scrape inside a batch (scheduled lane)."""
+
+    product_id: int
+    tracker_id: str | None = None
+    slot_at: datetime | None = None
 
 
 class TrackCore:
@@ -127,6 +141,44 @@ class TrackCore:
         return asyncio.run(
             run_browser_session(product_id, url, self.cfg, self.logger, use_headless)
         )
+
+    def scrape_many(
+        self,
+        requests: list[TrackRequest],
+        headless: bool | None = None,
+        deadline: float | None = None,
+        persist: bool = True,
+    ) -> list[tuple[TrackRequest, ScrapeResult]]:
+        """Scrape a batch in one browser, up to ``scrapePageConcurrency`` pages
+        at once, persisting each result. Products skipped because ``deadline``
+        passed are omitted from the return value (the caller should retry them).
+        """
+        if not requests:
+            return []
+        use_headless = self.cfg["Core"]["headless"] if headless is None else headless
+        concurrency = max(1, int(self.cfg["Core"].get("scrapePageConcurrency", 1)))
+        pairs = [(req.product_id, self.product_url(req.product_id)) for req in requests]
+        results = asyncio.run(
+            run_browser_batch(
+                pairs, self.cfg, self.logger, use_headless, concurrency, deadline
+            )
+        )
+
+        done: list[tuple[TrackRequest, ScrapeResult]] = []
+        for req, result in zip(requests, results, strict=True):
+            if result is None:
+                continue
+            if persist:
+                slot = req.slot_at or align_to_interval(utcnow(), 1)
+                self._persist_result(
+                    req.product_id,
+                    SnapshotTrigger.TRACK.value,
+                    req.tracker_id,
+                    slot,
+                    result,
+                )
+            done.append((req, result))
+        return done
 
     # ------------------------------------------------------------------ internals
     def _blocking_run(

@@ -25,7 +25,7 @@ import logging
 import threading
 
 from app.core.jobs.runner import JobRunner
-from app.core.track.core import TrackCore
+from app.core.track.core import TrackCore, TrackRequest
 from app.entity.price import SnapshotTrigger
 from app.entity.scheduler import JobType
 from app.internal.postgresql.module import Database
@@ -140,13 +140,17 @@ class CronCore:
         return summary
 
     # ------------------------------------------------------------------ execution
-    def run_track_task(self, task) -> None:
-        """Handler for a queued TRACK task (runs on the scheduled lane)."""
+    @staticmethod
+    def _product_id(task) -> int | None:
         try:
             payload = json.loads(task.payload or "{}")
         except (TypeError, ValueError):
             payload = {}
-        product_id = task.product_id or payload.get("productId")
+        return task.product_id or payload.get("productId")
+
+    def run_track_task(self, task) -> None:
+        """Handler for a single queued TRACK task (used outside the batch lane)."""
+        product_id = self._product_id(task)
         if product_id is None:
             self.logger.warning("track task %s has no product", task.job_id)
             return
@@ -168,7 +172,59 @@ class CronCore:
             snapshot = self.db.prices.get_snapshot(result.snapshot_id)
 
         self._cover_due(product_id, slot, snapshot)
+        self._notify(product_id, snapshot)
 
+    def run_track_tasks(self, tasks: list, deadline: float | None = None) -> dict:
+        """Batch handler: scrape many products in one browser.
+
+        Returns ``{job_id: None}`` for completed products; an exception value
+        marks a failure. Products whose ``deadline`` passed stay out of the map
+        so the runner releases them for the next drain.
+        """
+        outcomes: dict[int, Exception | None] = {}
+        requests: list[TrackRequest] = []
+        owner: dict[int, object] = {}
+
+        for task in tasks:
+            product_id = self._product_id(task)
+            if product_id is None:
+                outcomes[task.job_id] = None
+                continue
+            trackers = self.db.trackers.list_active_for_product(product_id)
+            if not trackers:
+                outcomes[task.job_id] = None
+                continue
+            request = TrackRequest(
+                product_id=product_id,
+                tracker_id=trackers[0].id,
+                slot_at=ensure_utc(task.slot_at),
+            )
+            requests.append(request)
+            owner[id(request)] = task
+
+        if not requests:
+            return outcomes
+
+        try:
+            results = self.track_core.scrape_many(requests, deadline=deadline)
+        except Exception as exc:  # noqa: BLE001
+            self.logger.exception("track batch failed")
+            for request in requests:
+                outcomes[owner[id(request)].job_id] = exc
+            return outcomes
+
+        for request, result in results:
+            task = owner[id(request)]
+            snapshot = None
+            if result.success and result.snapshot_id:
+                snapshot = self.db.prices.get_snapshot(result.snapshot_id)
+            self._cover_due(request.product_id, request.slot_at, snapshot)
+            self._notify(request.product_id, snapshot)
+            outcomes[task.job_id] = None
+
+        return outcomes
+
+    def _notify(self, product_id: int, snapshot) -> None:
         if snapshot is not None and self.snapshot_hook is not None:
             try:
                 self.snapshot_hook(product_id, snapshot)

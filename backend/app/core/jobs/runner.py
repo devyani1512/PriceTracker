@@ -50,6 +50,7 @@ class JobRunner:
             max_workers=self.manual_threads, thread_name_prefix="pt-manual"
         )
         self._handlers: dict[str, callable] = {}
+        self._batch_handlers: dict[str, callable] = {}
         self._threads: list[threading.Thread] = []
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -59,6 +60,16 @@ class JobRunner:
     def register(self, category, handler) -> None:
         key = category.value if hasattr(category, "value") else str(category)
         self._handlers[key] = handler
+
+    def register_batch(self, category, handler) -> None:
+        """Register a handler that runs a whole batch at once.
+
+        ``handler(tasks, deadline) -> dict[job_id, Exception | None]``. Tasks it
+        doesn't return for are released (treated as not run) so the next drain
+        picks them up. Used by TRACK so one browser serves many products.
+        """
+        key = category.value if hasattr(category, "value") else str(category)
+        self._batch_handlers[key] = handler
 
     # ------------------------------------------------------------------ manual lane
     def submit_manual(self, fn) -> Future:
@@ -132,17 +143,24 @@ class JobRunner:
             "failed": 0,
             "stale": 0,
             "missingHandler": 0,
+            "released": 0,
+            "batches": 0,
             "budgetExceeded": False,
         }
 
+        batches: dict[str, list] = {}
         for task in claimed:
             if time.monotonic() >= deadline:
                 self.db.tasks.release(task.job_id)
+                summary["released"] += 1
                 summary["budgetExceeded"] = True
                 continue
             if self._is_stale(task, now):
                 self.db.tasks.complete(task.job_id)
                 summary["stale"] += 1
+                continue
+            if task.category in self._batch_handlers:
+                batches.setdefault(task.category, []).append(task)
                 continue
             handler = self._handlers.get(task.category)
             if handler is None:
@@ -150,29 +168,57 @@ class JobRunner:
                 self.db.tasks.complete(task.job_id)
                 summary["missingHandler"] += 1
                 continue
-            try:
-                handler(task)
-            except Exception:
-                self.logger.exception(
-                    "task %s (%s) failed", task.job_id, task.category
-                )
-                attempts = int(task.attempts or 0) + 1
-                if attempts < self.max_attempts:
-                    self.db.tasks.reschedule(
-                        task.job_id,
-                        utcnow() + timedelta(seconds=self.retry_backoff),
-                        attempts,
-                    )
-                else:
-                    self.db.tasks.complete(task.job_id)
-                summary["failed"] += 1
-            else:
-                self.db.tasks.complete(task.job_id)
-                summary["done"] += 1
+            self._run_single(handler, task, summary)
+
+        for category, tasks in batches.items():
+            self._run_batch(category, tasks, deadline, summary)
 
         if summary["claimed"]:
             self.logger.info("scheduled drain: %s", summary)
         return summary
+
+    # ------------------------------------------------------------------ task execution
+    def _run_single(self, handler, task, summary: dict) -> None:
+        try:
+            handler(task)
+        except Exception:
+            self.logger.exception("task %s (%s) failed", task.job_id, task.category)
+            self._schedule_retry(task, summary)
+        else:
+            self.db.tasks.complete(task.job_id)
+            summary["done"] += 1
+
+    def _run_batch(self, category: str, tasks: list, deadline: float, summary: dict) -> None:
+        summary["batches"] += 1
+        handler = self._batch_handlers[category]
+        try:
+            outcomes = handler(tasks, deadline)
+        except Exception:
+            self.logger.exception("batch handler %s failed", category)
+            outcomes = {}
+        for task in tasks:
+            if task.job_id not in outcomes:
+                # Not run (deadline/crash): release so a later drain retries it.
+                self.db.tasks.release(task.job_id)
+                summary["released"] += 1
+                continue
+            if outcomes[task.job_id] is None:
+                self.db.tasks.complete(task.job_id)
+                summary["done"] += 1
+            else:
+                self._schedule_retry(task, summary)
+
+    def _schedule_retry(self, task, summary: dict) -> None:
+        attempts = int(task.attempts or 0) + 1
+        if attempts < self.max_attempts:
+            self.db.tasks.reschedule(
+                task.job_id,
+                utcnow() + timedelta(seconds=self.retry_backoff),
+                attempts,
+            )
+        else:
+            self.db.tasks.complete(task.job_id)
+        summary["failed"] += 1
 
     def _is_stale(self, task, now) -> bool:
         """Drop slots that are so old a fresher one must already be due."""

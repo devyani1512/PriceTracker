@@ -60,6 +60,10 @@ def _apply_env_overrides(cfg: dict) -> dict:
         core["scrapeBrowserRecycle"] = int(v)
     if v := _env("SCRAPE_LAYOUT_TTL_SECONDS"):
         core["scrapeLayoutTtlSeconds"] = float(v)
+    if v := _env("SCRAPE_PRODUCT_BUDGET_MS"):
+        core["scrapeProductBudgetMs"] = int(v)
+    if v := _env("SCRAPE_PAGE_CONCURRENCY"):
+        core["scrapePageConcurrency"] = int(v)
     if v := _env("CATALOG_BUDGET_SECONDS"):
         core["catalogBudgetSeconds"] = float(v)
     if v := _env("CATALOG_MIN_INTERVAL_MS"):

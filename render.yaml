@@ -50,6 +50,10 @@ services:
         value: "25"          # relaunch after N scrapes to bound memory
       - key: COOKIE_BANNER_TIMEOUT_MS
         value: "1000"        # per-check wait for the usually-absent banner
+      - key: SCRAPE_PRODUCT_BUDGET_MS
+        value: "120000"      # cap per product; move on and retry next tick
+      - key: SCRAPE_PAGE_CONCURRENCY
+        value: "2"           # pages per browser in the scheduled batch
       - key: CORS_ORIGINS
         sync: false          # e.g. https://your-app.vercel.app
       # Render's free plan blocks outbound SMTP (ports 25/465/587), so email

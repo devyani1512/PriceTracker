@@ -9,9 +9,9 @@ explicitly instead of guessing after a fixed sleep.
 
 ``BrowserSession`` starts Playwright + Chromium **once** and opens a fresh
 context/page per product, so a batch of scrapes doesn't pay browser startup for
-every product. The browser is recycled after a configurable number of scrapes to
-bound memory. Every phase is timed into ``ScrapeResult.timings`` so we can see
-where the time actually goes.
+every product. ``run_browser_batch`` can run several pages concurrently inside
+that one browser. The browser is recycled after a configurable number of scrapes
+to bound memory. Every phase is timed into ``ScrapeResult.timings``.
 """
 
 from __future__ import annotations
@@ -236,23 +236,33 @@ async def _attempt(
     cfg: dict,
     logger: logging.Logger,
     load_classes: LayoutLoader,
+    deadline: float | None = None,
 ) -> tuple[dict, dict[str, float]]:
     """One full scrape attempt against an already-open page.
 
-    Returns ``(data, timings)``. ``data`` either has an ``error`` key or the
-    parsed quote fields.
+    ``deadline`` is a monotonic per-product budget: every wait is capped to the
+    time remaining, so a single slow step can't blow past it. Returns
+    ``(data, timings)``; ``data`` either has an ``error`` key or quote fields.
     """
     timeout = int(cfg["Core"]["scrapeTimeoutMs"])
     reveal_timeout = int(cfg["Core"].get("scrapeRevealTimeoutMs", 300000))
     banner_timeout = int(cfg["Core"].get("cookieBannerTimeoutMs", 1000))
     timings: dict[str, float] = {}
 
+    def cap(default_ms: int) -> int:
+        if deadline is None:
+            return default_ms
+        remaining_ms = int((deadline - _now()) * 1000)
+        if remaining_ms <= 0:
+            raise PlaywrightTimeoutError("scrape product budget exceeded")
+        return max(250, min(default_ms, remaining_ms))
+
     started = _now()
-    await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+    await page.goto(url, wait_until="domcontentloaded", timeout=cap(timeout))
     timings["gotoMs"] = _ms(started)
 
     started = _now()
-    await dismiss_cookie_banner(page, banner_timeout)
+    await dismiss_cookie_banner(page, cap(banner_timeout))
     timings["bannerAfterGotoMs"] = _ms(started)
 
     started = _now()
@@ -261,7 +271,7 @@ async def _attempt(
 
     reveal = page.get_by_role("button", name="Reveal price")
     started = _now()
-    await reveal.wait_for(state="visible", timeout=timeout)
+    await reveal.wait_for(state="visible", timeout=cap(timeout))
     timings["revealButtonMs"] = _ms(started)
 
     started = _now()
@@ -271,15 +281,16 @@ async def _attempt(
         reveal,
         int(cfg["Core"]["scrapeMinMoves"]),
         int(cfg["Core"]["scrapeMinDwellMs"]),
-        timeout,
+        cap(timeout),
         logger,
-        banner_timeout,
+        cap(banner_timeout),
     )
     timings["hoverMs"] = _ms(started)
 
     started = _now()
-    await dismiss_cookie_banner(page, banner_timeout)
+    await dismiss_cookie_banner(page, cap(banner_timeout))
     timings["bannerBeforeClickMs"] = _ms(started)
+
     started = _now()
     await reveal.click()
     # Wait for the price block to reach a terminal state (success or error),
@@ -289,7 +300,7 @@ async def _attempt(
     await page.wait_for_function(
         "() => document.querySelector('.price-block.price-success')"
         " || document.querySelector('.price-block.price-error')",
-        timeout=reveal_timeout,
+        timeout=cap(reveal_timeout),
     )
     timings["revealWaitMs"] = _ms(started)
 
@@ -341,6 +352,8 @@ class BrowserSession:
         self._pw = None
         self._browser = None
         self._uses = 0
+        self._active = 0
+        self._recycle_lock: asyncio.Lock | None = None
         self.start_ms = 0
         self._layout: dict | None = None
         self._layout_revision: int | None = None
@@ -351,6 +364,7 @@ class BrowserSession:
         started = _now()
         self._pw = await async_playwright().start()
         await self._launch()
+        self._recycle_lock = asyncio.Lock()
         self.start_ms = _ms(started)
         self.logger.info("browser started in %dms", self.start_ms)
 
@@ -370,9 +384,16 @@ class BrowserSession:
         await self._launch()
 
     async def _maybe_recycle(self) -> None:
-        if self._uses >= self.recycle_after:
-            self.logger.info("recycling browser after %d scrapes", self._uses)
-            await self._recycle()
+        # Only recycle when no scrape is in flight, so concurrent pages aren't
+        # torn down under each other. Deferred recycle happens on the next start.
+        if self._uses < self.recycle_after:
+            return
+        if self._active > 0 or self._recycle_lock is None:
+            return
+        async with self._recycle_lock:
+            if self._uses >= self.recycle_after and self._active == 0:
+                self.logger.info("recycling browser after %d scrapes", self._uses)
+                await self._recycle()
 
     async def close(self) -> None:
         if self._browser is not None:
@@ -415,36 +436,46 @@ class BrowserSession:
 
     async def scrape(self, product_id: int, url: str) -> ScrapeResult:
         await self._maybe_recycle()
-        result = ScrapeResult(product_id=product_id, url=url)
-        started = _now()
-
-        context_started = _now()
-        context = await self._new_context()
-        result.timings["contextMs"] = _ms(context_started)
-        result.timings["browserStartMs"] = self.start_ms
-
-        page = await context.new_page()
+        self._active += 1
         try:
-            await self._run_attempts(result, page, context, url)
-        finally:
-            try:
-                await context.close()
-            except Exception:
-                pass
+            result = ScrapeResult(product_id=product_id, url=url)
+            started = _now()
 
-        self._uses += 1
-        result.duration_ms = _ms(started)
-        return result
+            context_started = _now()
+            context = await self._new_context()
+            result.timings["contextMs"] = _ms(context_started)
+            result.timings["browserStartMs"] = self.start_ms
+
+            page = await context.new_page()
+            try:
+                await self._run_attempts(result, page, context, url)
+            finally:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
+
+            self._uses += 1
+            result.duration_ms = _ms(started)
+            return result
+        finally:
+            self._active -= 1
 
     async def _run_attempts(self, result: ScrapeResult, page: Page, context, url: str) -> None:
         cfg = self.cfg
         max_attempts = max(1, int(cfg["Core"]["scrapeMaxAttempts"]))
+        budget_ms = int(cfg["Core"].get("scrapeProductBudgetMs", 120000))
+        product_deadline = (_now() + budget_ms / 1000.0) if budget_ms > 0 else None
 
         for attempt in range(1, max_attempts + 1):
+            if product_deadline is not None and _now() >= product_deadline:
+                self._mark_budget_exceeded(result, attempt)
+                break
+
             attempt_started = _now()
             try:
                 data, timings = await _attempt(
-                    page, url, cfg, self.logger, self._load_classes
+                    page, url, cfg, self.logger, self._load_classes, product_deadline
                 )
                 for key, value in timings.items():
                     result.timings[f"a{attempt}.{key}"] = value
@@ -510,12 +541,16 @@ class BrowserSession:
             # Fresh page for the next attempt so a half-loaded or error-state
             # page never contaminates the retry.
             if attempt < max_attempts:
+                backoff = min(0.5 * (2 ** (attempt - 1)), 5.0)
+                if product_deadline is not None and _now() + backoff >= product_deadline:
+                    self._mark_budget_exceeded(result, attempt)
+                    break
                 try:
                     await page.close()
                 except Exception:
                     pass
                 page = await context.new_page()
-                await asyncio.sleep(min(0.5 * (2 ** (attempt - 1)), 5.0))
+                await asyncio.sleep(backoff)
 
         # Only call it a structure change if *every* attempt failed structurally.
         structural = [a for a in result.attempts_detail if a.error_kind == "structure"]
@@ -529,6 +564,22 @@ class BrowserSession:
             result.error_kind = "unknown"
         if not result.success and result.error is None:
             result.error = "scrape failed with no recorded error"
+
+    def _mark_budget_exceeded(self, result: ScrapeResult, attempt: int) -> None:
+        if not result.attempts_detail:
+            result.attempts_detail.append(
+                ScrapeAttempt(
+                    attempt=attempt,
+                    success=False,
+                    duration_ms=0,
+                    error="scrape product budget exceeded",
+                    error_kind="timeout",
+                )
+            )
+        if result.error is None:
+            result.error = "scrape product budget exceeded"
+        if result.error_kind is None:
+            result.error_kind = "timeout"
 
 
 async def run_browser_session(
@@ -545,3 +596,53 @@ async def run_browser_session(
         return await session.scrape(product_id, url)
     finally:
         await session.close()
+
+
+async def run_browser_batch(
+    pairs: list[tuple[int, str]],
+    cfg: dict,
+    logger: logging.Logger,
+    headless: bool,
+    concurrency: int = 1,
+    deadline: float | None = None,
+) -> list[ScrapeResult | None]:
+    """Scrape many products in one browser, up to ``concurrency`` pages at once.
+
+    Returns a list aligned with ``pairs``; an entry is ``None`` when the overall
+    ``deadline`` (monotonic) passed before it could run.
+    """
+    session = BrowserSession(cfg, logger, headless)
+    await session.start()
+    semaphore = asyncio.Semaphore(max(1, int(concurrency)))
+    results: list[ScrapeResult | None] = [None] * len(pairs)
+
+    async def scrape_one(index: int, product_id: int, url: str) -> None:
+        async with semaphore:
+            if deadline is not None and time.monotonic() >= deadline:
+                return
+            try:
+                results[index] = await session.scrape(product_id, url)
+            except Exception as exc:  # noqa: BLE001
+                kind, message = _classify_exception(exc)
+                failed = ScrapeResult(product_id=product_id, url=url)
+                failed.error = message
+                failed.error_kind = kind
+                failed.attempts = 1
+                failed.attempts_detail.append(
+                    ScrapeAttempt(
+                        attempt=1,
+                        success=False,
+                        duration_ms=0,
+                        error=message,
+                        error_kind=kind,
+                    )
+                )
+                results[index] = failed
+
+    try:
+        await asyncio.gather(
+            *(scrape_one(i, product_id, url) for i, (product_id, url) in enumerate(pairs))
+        )
+    finally:
+        await session.close()
+    return results
