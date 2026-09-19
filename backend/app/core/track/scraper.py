@@ -89,22 +89,77 @@ class StructureChangedError(Exception):
 
 
 async def dismiss_cookie_banner(page: Page, timeout_ms: int = 1000) -> bool:
-    """Dismiss the cookie consent banner if present. Safe to call repeatedly.
+    """Dismiss the cookie consent banner/overlay. Safe to call repeatedly.
 
-    We check ``count()`` first (instant) instead of ``wait_for(visible)``, because
-    this runs ~3x per scrape and the banner is usually absent — waiting the full
-    timeout each time was the single biggest hidden cost. If the banner renders
-    late, the next check catches it. ``timeout_ms`` only bounds the click.
+    The storefront mounts a full-screen ``.cookie-overlay`` (``position: fixed;
+    inset: 0; z-index: 50``) after a short random delay, and its Accept button
+    only unmounts after a random **1–3** clicks. A single click can therefore
+    leave the overlay covering the page, silently intercepting the Reveal-price
+    click for the whole actionability timeout. So keep clicking until the
+    overlay is actually gone, then as a last resort disable its pointer events.
+
+    We still check ``count()`` first (instant) because the banner is absent on
+    ~25% of loads and this runs several times per scrape; ``timeout_ms`` only
+    bounds each click.
     """
     try:
-        accept = page.get_by_role("button", name="Accept cookies")
-        if await accept.count() == 0:
+        overlay = page.locator(".cookie-overlay")
+        if await overlay.count() == 0:
             return False
-        await accept.first.click(timeout=timeout_ms)
-        await page.wait_for_timeout(50)
-        return True
+
+        dismissed = False
+        for _ in range(5):  # the banner's counter is at most 3
+            accept = page.get_by_role("button", name="Accept cookies")
+            if await accept.count() == 0:
+                accept = page.locator(".cookie-banner .btn-primary")
+            if await accept.count() == 0:
+                break
+            try:
+                await accept.first.click(timeout=timeout_ms)
+            except Exception:
+                await page.wait_for_timeout(100)
+                continue
+            dismissed = True
+            await page.wait_for_timeout(60)
+            if await overlay.count() == 0:
+                return True
+
+        # Still mounted after the click budget: neutralise it so it cannot
+        # intercept the reveal click. Keep the DOM (and its handlers) intact.
+        try:
+            await overlay.evaluate_all(
+                "els => els.forEach(el => { el.style.pointerEvents = 'none'; })"
+            )
+        except Exception:
+            pass
+        return dismissed
     except Exception:
         return False
+
+
+async def _click_reveal(
+    page: Page, reveal, timeout_ms: int, banner_timeout_ms: int, logger: logging.Logger
+) -> None:
+    """Click Reveal price, clearing the consent overlay if it blocks the click.
+
+    The overlay can appear right as we click (random 5–1500 ms mount delay) or
+    survive a single Accept click, so click with a short timeout, re-dismiss,
+    and retry within the phase budget instead of burning the whole 30 s.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_ms / 1000.0
+    while True:
+        await dismiss_cookie_banner(page, banner_timeout_ms)
+        remaining = int((deadline - loop.time()) * 1000)
+        if remaining <= 0:
+            raise PlaywrightTimeoutError("Reveal price click timed out")
+        try:
+            await reveal.click(timeout=min(3000, remaining))
+            return
+        except PlaywrightTimeoutError:
+            logger.info("reveal click blocked (likely cookie overlay); retrying")
+            if loop.time() >= deadline:
+                raise
 
 
 async def _load_layout(page: Page, base_url: str, logger: logging.Logger) -> tuple[dict, int | None]:
@@ -292,7 +347,7 @@ async def _attempt(
     timings["bannerBeforeClickMs"] = _ms(started)
 
     started = _now()
-    await reveal.click()
+    await _click_reveal(page, reveal, cap(timeout), cap(banner_timeout), logger)
     # Wait for the price block to reach a terminal state (success or error),
     # rather than assuming a fixed render delay. This is where slow/async
     # responses are absorbed, so it gets its own (long) budget — the storefront
