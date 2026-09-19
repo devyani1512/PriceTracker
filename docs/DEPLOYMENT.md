@@ -41,8 +41,8 @@ Option A — blueprint:
 1. Push this repo to GitHub.
 2. Render → **New → Blueprint** → pick the repo. `render.yaml` provisions the
    Docker web service.
-3. Fill the `sync: false` env vars: `DATABASE_URL`, `CORS_ORIGINS`,
-   `SMTP_USER`, `SMTP_APP_PASSWORD`, `SMTP_FROM`.
+3. Fill the `sync: false` env vars: `DATABASE_URL`, `DIRECT_DATABASE_URL`,
+   `CORS_ORIGINS`, `EMAIL_API_KEY`, `SMTP_FROM`.
 
 Option B — manual:
 
@@ -66,6 +66,9 @@ Important env vars:
 | `MANUAL_TRACK_THREADS` | `1` (user "Refresh" lane) |
 | `SCHEDULED_TRACK_THREADS` | `1` (scheduled lane; memory stays flat) |
 | `CRON_INLINE_BUDGET_SECONDS` | `25` (under cron-job.org's 30s timeout) |
+| `EMAIL_PROVIDER` | `brevo` (Render blocks SMTP) |
+| `EMAIL_API_KEY` | Brevo/SendGrid/Resend API key |
+| `SMTP_FROM` | verified sender address |
 | `STOREFRONT_BASE` | `https://demo.inelabteamdev.com` |
 
 The Docker image is based on `mcr.microsoft.com/playwright/python`, so Chromium
@@ -148,10 +151,36 @@ the default here.
 `SELF_TICK=true` (the default outside Render) runs a tick every `tickSeconds`.
 Never enable this on the free Render web service.
 
-## 5. Gmail app password (email alerts)
+## 5. Email alerts
+
+**Render's free plan blocks outbound SMTP** (ports 25, 465, 587), so Gmail SMTP
+fails there with `[Errno 101] Network is unreachable`. On Render, send over an
+HTTPS email API instead. Locally, plain SMTP still works.
+
+### Render — Brevo (free, single-sender, no domain required)
+
+1. Create a free account at <https://www.brevo.com>.
+2. **Senders, Domains & Dedicated IPs → Senders** → add and verify the From
+   address you want to send from.
+3. **SMTP & API → API Keys** → create a key and copy it.
+4. Set these env vars on the web service:
+   - `EMAIL_PROVIDER=brevo`
+   - `EMAIL_API_KEY=<the API key>`
+   - `SMTP_FROM=<the verified sender address>`
+   - `SMTP_FROM_NAME=Price Tracker` (optional)
+
+SendGrid (`EMAIL_PROVIDER=sendgrid`) and Resend (`EMAIL_PROVIDER=resend`) are
+also supported; they use the same `EMAIL_API_KEY` / `SMTP_FROM` vars.
+
+> Provider-specific key names (`BREVO_API_KEY`, `SENDGRID_API_KEY`,
+> `RESEND_API_KEY`) are accepted too, and infer the provider automatically.
+
+### Local development — Gmail SMTP
 
 1. Enable 2-step verification on the Google account.
-2. Create an **App password** (Google Account → Security → App passwords).
+2. Google Account → Security → **App passwords** → create one.
 3. Set `SMTP_USER`, `SMTP_APP_PASSWORD`, `SMTP_FROM`.
-4. If SMTP is unset the backend logs the email as a dry-run and marks the
-   notification sent, so the pipeline can be exercised without credentials.
+
+If email is unconfigured (or a provider key is missing), the backend logs a
+dry-run and marks the notification sent, so the pipeline can be exercised
+without credentials.

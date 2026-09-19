@@ -44,6 +44,17 @@ services:
         value: "25"          # must stay under cron-job.org's 30s request timeout
       - key: CORS_ORIGINS
         sync: false          # e.g. https://your-app.vercel.app
+      # Render's free plan blocks outbound SMTP (ports 25/465/587), so email
+      # goes over an HTTPS API. Set EMAIL_API_KEY (Brevo) in the dashboard.
+      - key: EMAIL_PROVIDER
+        value: brevo
+      - key: EMAIL_API_KEY
+        sync: false          # Brevo API key
+      - key: SMTP_FROM
+        sync: false          # verified sender address
+      - key: SMTP_FROM_NAME
+        value: Price Tracker
+      # SMTP stays available for local development only.
       - key: SMTP_HOST
         value: smtp.gmail.com
       - key: SMTP_PORT
@@ -52,7 +63,3 @@ services:
         sync: false
       - key: SMTP_APP_PASSWORD
         sync: false
-      - key: SMTP_FROM
-        sync: false
-      - key: SMTP_FROM_NAME
-        value: Price Tracker

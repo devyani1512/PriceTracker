@@ -52,10 +52,14 @@ dbname = "pricedb"
 url = ""
 
 [Email]
+# provider: "smtp" (local/dev), or an HTTP API that works through Render's
+# SMTP port block: "brevo", "sendgrid" or "resend".
+provider = "smtp"
 host = "smtp.gmail.com"
 port = 587
 user = ""
 appPassword = ""
+apiKey = ""
 fromAddr = ""
 fromName = "Price Tracker"
 

@@ -78,6 +78,20 @@ def _apply_env_overrides(cfg: dict) -> dict:
     if v := _env("DB_NAME"):
         db["dbname"] = v
 
+    if v := _env("EMAIL_PROVIDER"):
+        mail["provider"] = v.strip().lower()
+    if v := _env("EMAIL_API_KEY"):
+        mail["apiKey"] = v
+    # Provider-specific key names are accepted too, and infer the provider.
+    for key_env, provider in (
+        ("BREVO_API_KEY", "brevo"),
+        ("SENDGRID_API_KEY", "sendgrid"),
+        ("RESEND_API_KEY", "resend"),
+    ):
+        if v := _env(key_env):
+            mail["apiKey"] = v
+            if not _env("EMAIL_PROVIDER"):
+                mail["provider"] = provider
     if v := _env("SMTP_HOST"):
         mail["host"] = v
     if v := _env("SMTP_PORT"):

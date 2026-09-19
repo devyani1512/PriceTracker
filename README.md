@@ -68,7 +68,8 @@ Core:
 
 Bonus:
 
-- Price-drop and back-in-stock alerts, in-app and by email (Gmail SMTP)
+- Price-drop and back-in-stock alerts, in-app and by email (SMTP locally,
+  Brevo/SendGrid/Resend HTTPS API on Render, which blocks SMTP ports)
 - Cross-product dashboard with change flags
 - Page-structure change detection via layout revision + selector checks
 - Configurable refresh frequency per product
